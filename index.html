@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>A13 KERNEL EXEC</title>
+    <style>
+        body { background: #000; color: #0f0; font-family: monospace; padding: 20px; text-align: center; }
+        .console { background: #050505; border: 1px solid #0f0; height: 300px; overflow-y: auto; padding: 10px; text-align: left; font-size: 12px; margin-bottom: 20px; }
+        button { background: #0f0; color: #000; border: none; padding: 15px; width: 100%; font-weight: bold; cursor: pointer; margin-top: 10px; }
+        button:active { background: #008800; }
+        .addr { color: #55f; }
+    </style>
+</head>
+<body>
+    <h2>⚡ iOS 26.4 - A13 BRIDGE ⚡</h2>
+    
+    <div class="console" id="console">
+        [#] Sistema pronto. Aguardando comando...
+    </div>
+
+    <button onclick="elevateRoot()">1. ESCALAR PARA ROOT (cr_uid 0)</button>
+    <button onclick="startSSH()">2. DISPARAR SSH DAEMON</button>
+
+    <script>
+        function log(msg) {
+            const c = document.getElementById('console');
+            c.innerHTML += `<br>[${new Date().toLocaleTimeString()}] ${msg}`;
+            c.scrollTop = c.scrollHeight;
+        }
+
+        // --- ENVIAR COMANDO PARA O C ---
+        function elevateRoot() {
+            log("Calculando offset cr_uid...");
+            const KSLIDE = 0x38a2000n; // Exemplo de Slide
+            const PHYS_ADDR = 0x100004018n; // Exemplo de endereço físico mapeado
+
+            log(`Alvo físico: <span class="addr">0x${PHYS_ADDR.toString(16)}</span>`);
+            
+            // CHAMA A PONTE C (KernelDriver.m)
+            window.webkit.messageHandlers.kexec.postMessage({
+                op: "phys_write",
+                addr: PHYS_ADDR.toString(),
+                val: 0 // UID 0 = Root
+            });
+        }
+
+        function startSSH() {
+            log("Solicitando spawn do SSHD...");
+            window.webkit.messageHandlers.kexec.postMessage({
+                op: "spawn_ssh"
+            });
+        }
+    </script>
+</body>
+</html>
