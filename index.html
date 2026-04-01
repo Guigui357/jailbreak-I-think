@@ -2,50 +2,99 @@
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <title>A13 KERNEL SCANNER</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A13 KERNEL ENGINE - iOS 26.4</title>
     <style>
-        body { background: #000; color: #0f0; font-family: monospace; padding: 20px; text-align: center; }
-        .console { background: #050505; border: 1px solid #0f0; height: 350px; overflow-y: auto; padding: 10px; text-align: left; font-size: 11px; margin-bottom: 20px; }
-        button { background: #0f0; color: #000; border: none; padding: 15px; width: 100%; font-weight: bold; cursor: pointer; margin-bottom: 10px; border-radius: 5px; }
-        .addr { color: #55f; font-weight: bold; }
+        body { background: #000; color: #0f0; font-family: 'Courier New', monospace; padding: 20px; text-align: center; margin: 0; }
+        .header { border: 2px solid #0f0; padding: 10px; margin-bottom: 20px; box-shadow: 0 0 10px #0f0; }
+        .console { background: #050505; border: 1px solid #333; height: 350px; overflow-y: auto; padding: 10px; text-align: left; font-size: 11px; line-height: 1.4; color: #00ff00; }
+        .btn-group { margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
+        button { background: #0f0; color: #000; border: none; padding: 15px; font-weight: bold; cursor: pointer; border-radius: 4px; font-size: 14px; text-transform: uppercase; }
+        button:active { background: #008800; transform: scale(0.98); }
+        .success { color: #fff; background: #004400; font-weight: bold; }
+        .error { color: #f00; font-weight: bold; }
+        .addr { color: #5555ff; font-weight: bold; }
     </style>
 </head>
 <body>
-    <h2>🔍 SCANNER DE UID - iOS 26.4 (A13)</h2>
-    <div class="console" id="console">
-        [#] Hardware: ARM64e (PAC Enabled)<br>
-        [#] Aguardando início do scan...
+
+    <div class="header">
+        👑 iOS 26.4 KERNEL BRIDGE (CHIP A13) 👑
     </div>
 
-    <button onclick="startKernelScan()">🚀 INICIAR SCAN (BUSCAR UID 501)</button>
-    <button onclick="startSSH()" style="background:#f0f; color:#fff;">🚀 DISPARAR SSH (APÓS ROOT)</button>
+    <div class="console" id="console">
+        [#] System: ARM64e / PAC Enabled<br>
+        [#] Ready for Bridge Connection...
+    </div>
+
+    <div class="btn-group">
+        <!-- BOTÃO 1: Testar se o HTML e o C estão conversando -->
+        <button onclick="checkBridge()">🔍 1. TESTAR CONEXÃO (BRIDGE CHECK)</button>
+        
+        <!-- BOTÃO 2: Iniciar a busca pelo UID 501 no Kernel -->
+        <button onclick="startKernelScan()" style="background: #00ffff;">🚀 2. INICIAR SCAN (BUSCAR ROOT)</button>
+        
+        <!-- BOTÃO 3: Disparar SSH (Só funciona após o Root) -->
+        <button onclick="startSSH()" style="background: #ff00ff; color: #fff;">🛰️ 3. DISPARAR SSH (PORT 2222)</button>
+    </div>
 
     <script>
         const consoleDiv = document.getElementById('console');
+
+        // Função para imprimir no console do HTML
         function log(msg) {
-            consoleDiv.innerHTML += `<br>[${new Date().toLocaleTimeString()}] ${msg}`;
+            const now = new Date().toLocaleTimeString();
+            consoleDiv.innerHTML += `<br>[${now}] ${msg}`;
             consoleDiv.scrollTop = consoleDiv.scrollHeight;
         }
 
+        // 1. Diagnóstico da Ponte (Bridge)
+        function checkBridge() {
+            log("Verificando ponte 'kexec'...");
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.kexec) {
+                log("<span class='success'>✅ SUCESSO: Ponte detectada! O C está ouvindo.</span>");
+                // Envia uma mensagem vazia só para testar o receptor no C
+                window.webkit.messageHandlers.kexec.postMessage({ op: "ping" });
+            } else {
+                log("<span class='error'>❌ ERRO: Ponte 'kexec' não encontrada. Verifique o ViewController.m e a injeção da Dylib.</span>");
+            }
+        }
+
+        // 2. Comando de Scan de Memória
         async function startKernelScan() {
-            log("<b>Iniciando Scan de Memória...</b>");
-            // Base provável do kernel + Slide médio
-            let startAddr = 0xfffffff007004000n; 
+            log("<b>Solicitando Varredura de Memória ao Kernel...</b>");
             
-            log("Sondando vizinhança de 0x" + startAddr.toString(16));
-
-            // Enviamos o comando de scan para o C
-            window.webkit.messageHandlers.kexec.postMessage({
-                op: "scan_uid",
-                start_addr: startAddr.toString(),
-                range: 0x100000 // Escanear 1MB de memória
-            });
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.kexec) {
+                // Endereço base estático do Kernel para o iOS 26.4
+                const startAddr = "0xfffffff007004000"; 
+                
+                log("Sondando vizinhança de <span class='addr'>" + startAddr + "</span>");
+                
+                window.webkit.messageHandlers.kexec.postMessage({
+                    op: "scan_uid",
+                    start_addr: startAddr,
+                    range: 0x100000 // Scan de 1MB
+                });
+            } else {
+                log("<span class='error'>❌ Falha ao enviar comando: Bridge Inativa.</span>");
+            }
         }
 
+        // 3. Comando de Spawn SSH
         function startSSH() {
-            log("Solicitando spawn do SSHD...");
-            window.webkit.messageHandlers.kexec.postMessage({ op: "spawn_ssh" });
+            log("Enviando sinal de Spawn para SSHD...");
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.kexec) {
+                window.webkit.messageHandlers.kexec.postMessage({ op: "spawn_ssh" });
+            }
         }
+
+        // Listener global para capturar erros de injeção
+        window.onerror = function(msg, url, line) {
+            log("<span class='error'>JS Error: " + msg + " na linha " + line + "</span>");
+        };
+
+        log("Interface carregada. Aguardando interação...");
     </script>
+
 </body>
 </html>
