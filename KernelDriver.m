@@ -3,68 +3,53 @@
 #include <stdint.h>
 #include <mach/mach.h>
 #include <dlfcn.h>
-#include <spawn.h>
-
-typedef kern_return_t (*IOMainPortFunc)(mach_port_t, mach_port_t *);
-
-@interface KernelBridge : NSObject <WKScriptMessageHandler>
-@property (nonatomic, unsafe_unretained) WKWebView *webView;
-@end
 
 @implementation KernelBridge
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
     NSDictionary *data = message.body;
-    NSString *op = data[@"op"];
+    
+    if ([data[@"op"] isEqualToString:@"scan_uid"]) {
+        [self.webView evaluateJavaScript:@"log('⚡ Iniciando Scan Inteligente (A13)...')" completionHandler:nil];
 
-    // 1. OBTER PORTA DE HARDWARE (A13 BYPASS)
-    void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
-    IOMainPortFunc get_main_port = (IOMainPortFunc)dlsym(iokit, "IOMainPort");
-    mach_port_t mainPort;
-    get_main_port(MACH_PORT_NULL, &mainPort);
+        void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
+        typedef kern_return_t (*IOMainPortFunc)(mach_port_t, mach_port_t *);
+        IOMainPortFunc get_main_port = (IOMainPortFunc)dlsym(iokit, "IOMainPort");
+        mach_port_t mainPort;
+        get_main_port(MACH_PORT_NULL, &mainPort);
 
-    if ([op isEqualToString:@"scan_uid"]) {
-        [self.webView evaluateJavaScript:@"log('🧪 Varrendo kernel por UID 501...')" completionHandler:nil];
-        
-        uint64_t start_addr = 0xfffffff007004000ULL; 
-        for (uint32_t i = 0; i < 0x400000; i += 4) { // Varre 4MB
-            uint64_t current_addr = start_addr + i;
-            vm_offset_t read_data;
-            mach_msg_type_number_t size = 4;
+        uint64_t addr = 0xfffffff007004000ULL; 
+        int found = 0;
 
-            if (vm_read(mainPort, (vm_address_t)current_addr, 4, &read_data, &size) == KERN_SUCCESS) {
-                if (*(uint32_t *)read_data == 501) {
-                    // --- O PATCH DE ROOT ---
-                    uint32_t root_val = 0;
-                    // Tentativa de escrita física via porta de hardware
-                    kern_return_t wr = vm_write(mainPort, (vm_address_t)current_addr, (vm_offset_t)&root_val, 4);
-                    
-                    if (wr == KERN_SUCCESS) {
-                        NSString *ok = [NSString stringWithFormat:@"log('👑 <b>ROOT SUCESSO!</b> UID 0 aplicado em 0x%llX')", current_addr];
-                        [self.webView evaluateJavaScript:ok completionHandler:nil];
-                    } else {
-                        [self.webView evaluateJavaScript:@"log('⚠️ UID achado, mas escrita bloqueada pelo PPL.')" completionHandler:nil];
+        // Varredura segura: Verificamos a região antes de ler
+        for (int i = 0; i < 500; i++) { // Testa 500 blocos de memória
+            vm_size_t size = 0;
+            vm_region_basic_info_data_64_t info;
+            mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+            mach_port_t object_name;
+
+            // 1. Verifica se a região de memória permite LEITURA
+            kern_return_t kr = vm_region_64(mainPort, (vm_address_t *)&addr, &size, VM_REGION_BASIC_INFO_64, (uintptr_t)&info, &count, &object_name);
+            
+            if (kr == KERN_SUCCESS && (info.protection & VM_PROT_READ)) {
+                // 2. Se for legível, buscamos o UID 501
+                for (uint64_t j = 0; j < size; j += 4) {
+                    vm_offset_t read_data;
+                    mach_msg_type_number_t sz = 4;
+                    if (vm_read(mainPort, addr + j, 4, &read_data, &sz) == KERN_SUCCESS) {
+                        if (*(uint32_t *)read_data == 501) {
+                            NSString *msg = [NSString stringWithFormat:@"log('🎯 <b>ACHADO!</b> Endereço: 0x%llX')", addr + j];
+                            [self.webView evaluateJavaScript:msg completionHandler:nil];
+                            found = 1; break;
+                        }
                     }
-                    break;
                 }
             }
+            if (found) break;
+            addr += size; // Pula para a próxima região se não achou
         }
+        if (!found) [self.webView evaluateJavaScript:@"log('⚠️ Varredura limpa. UID não encontrado.')" completionHandler:nil];
+        dlclose(iokit);
     }
-
-    if ([op isEqualToString:@"spawn_ssh"]) {
-        [self.webView evaluateJavaScript:@"log('🛰️ Tentando Spawn SSHD...')" completionHandler:nil];
-        pid_t pid;
-        const char *argv[] = {"sshd", "-p", "2222", "-D", NULL};
-        // Se o patch de root acima funcionou, o spawn abaixo terá permissão total
-        int status = posix_spawn(&pid, "/usr/sbin/sshd", NULL, NULL, (char* const*)argv, NULL);
-        
-        if (status == 0) {
-            [self.webView evaluateJavaScript:@"log('✅ <b>SSH ATIVO!</b> Porta 2222')" completionHandler:nil];
-        } else {
-            NSString *err = [NSString stringWithFormat:@"log('❌ Falha: SSH recusado (Erro %d)')", status];
-            [self.webView evaluateJavaScript:err completionHandler:nil];
-        }
-    }
-    dlclose(iokit);
 }
 @end
