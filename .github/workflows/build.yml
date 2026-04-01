@@ -10,8 +10,13 @@ jobs:
       - name: Checkout Código
         uses: actions/checkout@v4
 
-      - name: Configurar Xcode 26.4
-        run: sudo xcode-select -s /Applications/Xcode_17.app/Contents/Developer # Versão compatível com iOS 26
+      - name: Selecionar Xcode (Auto-Detect)
+        run: |
+          # Lista os Xcodes disponíveis para debug (opcional)
+          ls /Applications | grep Xcode
+          # Seleciona a versão mais recente instalada no runner
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
 
       - name: Compilar Bridge Dylib (arch arm64e)
         run: |
