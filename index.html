@@ -2,48 +2,49 @@
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <title>A13 KERNEL EXEC</title>
+    <title>A13 KERNEL SCANNER</title>
     <style>
         body { background: #000; color: #0f0; font-family: monospace; padding: 20px; text-align: center; }
-        .console { background: #050505; border: 1px solid #0f0; height: 300px; overflow-y: auto; padding: 10px; text-align: left; font-size: 12px; margin-bottom: 20px; }
-        button { background: #0f0; color: #000; border: none; padding: 15px; width: 100%; font-weight: bold; cursor: pointer; margin-top: 10px; }
-        button:active { background: #008800; }
-        .addr { color: #55f; }
+        .console { background: #050505; border: 1px solid #0f0; height: 350px; overflow-y: auto; padding: 10px; text-align: left; font-size: 11px; margin-bottom: 20px; }
+        button { background: #0f0; color: #000; border: none; padding: 15px; width: 100%; font-weight: bold; cursor: pointer; margin-bottom: 10px; border-radius: 5px; }
+        .addr { color: #55f; font-weight: bold; }
     </style>
 </head>
 <body>
-    <h2>⚡ iOS 26.4 - A13 BRIDGE ⚡</h2>
-    
+    <h2>🔍 SCANNER DE UID - iOS 26.4 (A13)</h2>
     <div class="console" id="console">
-        [#] Sistema pronto. Aguardando comando...
+        [#] Hardware: ARM64e (PAC Enabled)<br>
+        [#] Aguardando início do scan...
     </div>
 
-    <button onclick="elevateRoot()">1. ESCALAR PARA ROOT (cr_uid 0)</button>
-    <button onclick="startSSH()">2. DISPARAR SSH DAEMON</button>
+    <button onclick="startKernelScan()">🚀 INICIAR SCAN (BUSCAR UID 501)</button>
+    <button onclick="startSSH()" style="background:#f0f; color:#fff;">🚀 DISPARAR SSH (APÓS ROOT)</button>
 
     <script>
+        const consoleDiv = document.getElementById('console');
         function log(msg) {
-            const c = document.getElementById('console');
-            c.innerHTML += `<br>[${new Date().toLocaleTimeString()}] ${msg}`;
-            c.scrollTop = c.scrollHeight;
+            consoleDiv.innerHTML += `<br>[${new Date().toLocaleTimeString()}] ${msg}`;
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
         }
 
-        // --- ENVIAR COMANDO PARA O C ---
-        function elevateRoot() {
-            log("Sondando cr_uid...");
-            window.webkit.messageHandlers.kexec.postMessage({
-            op: "phys_write",
-            addr: "0x100004018", // Mantenha como string para o C converter com segurança
-            val: 0
-        });
-    }
+        async function startKernelScan() {
+            log("<b>Iniciando Scan de Memória...</b>");
+            // Base provável do kernel + Slide médio
+            let startAddr = 0xfffffff007004000n; 
+            
+            log("Sondando vizinhança de 0x" + startAddr.toString(16));
 
+            // Enviamos o comando de scan para o C
+            window.webkit.messageHandlers.kexec.postMessage({
+                op: "scan_uid",
+                start_addr: startAddr.toString(),
+                range: 0x100000 // Escanear 1MB de memória
+            });
+        }
 
         function startSSH() {
             log("Solicitando spawn do SSHD...");
-            window.webkit.messageHandlers.kexec.postMessage({
-                op: "spawn_ssh"
-            });
+            window.webkit.messageHandlers.kexec.postMessage({ op: "spawn_ssh" });
         }
     </script>
 </body>
