@@ -39,9 +39,7 @@
         // 3-1. Pega o caminho absoluto do binário dentro do seu Bundle
         NSString *bundleSshd = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
         const char *sshd_path = [bundleSshd UTF8String];
-        // 3-2. Garante que o arquivo tenha permissão de execução (crucial após o bypass)
-        chmod(sshd_path, 0755);
-        // 3-3. EXECUTA
+        // 3-2. EXECUTA
         char *const sshd_argv[] = {(char *)sshd_path, "-p", "2222", "-D", "-e", NULL};
         
         int spawn_err = posix_spawn(&pid, sshd_path, NULL, &attr, sshd_argv, NULL);
