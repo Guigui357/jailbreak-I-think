@@ -17,13 +17,13 @@ jobs:
         run: |
           clang -arch arm64e -fobjc-arc \
           -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
-          -framework Foundation -framework WebKit \
+          -framework Foundation -framework WebKit -framework IOKit -framework CoreFoundation \
           -dynamiclib KernelDriver.m -o KernelBridge.dylib
 
       - name: Create App Structure
         run: |
           mkdir -p Payload/A13Exploit.app
-          # Compilar o código do App Shell (ViewController)
+          # Compilar o código do App Shell 
           clang -arch arm64e -fobjc-arc \
           -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
           -framework UIKit -framework WebKit -framework Foundation \
