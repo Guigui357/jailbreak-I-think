@@ -1,54 +1,61 @@
-name: Build iOS Kernel Exploit (A13/26.4)
+name: Build A13 Exploit IPA
 
 on: [push, workflow_dispatch]
 
 jobs:
   build:
-    runs-on: macos-latest # Garante o uso de máquinas Apple com Xcode
+    runs-on: macos-latest
 
     steps:
-      - name: Checkout Código
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Selecionar Xcode (Auto-Detect)
-        run: |
-          # Lista os Xcodes disponíveis para debug (opcional)
-          ls /Applications | grep Xcode
-          # Seleciona a versão mais recente instalada no runner
-          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-          xcodebuild -version
+      - name: Setup Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-      - name: Compilar Bridge Dylib (arch arm64e)
+      - name: Compile KernelBridge Dylib (A13/PAC)
         run: |
-          clang -arch arm64e \
+          clang -arch arm64e -fobjc-arc \
           -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
           -framework Foundation -framework WebKit \
           -dynamiclib KernelDriver.m -o KernelBridge.dylib
-          echo "[+] Dylib compilada para A13."
 
-      - name: Preparar Entitlements
+      - name: Create App Structure
         run: |
-          cat <<EOF > ents.plist
+          mkdir -p Payload/A13Exploit.app
+          # Compilar o código do App Shell (ViewController)
+          clang -arch arm64e -fobjc-arc \
+          -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
+          -framework UIKit -framework WebKit -framework Foundation \
+          main.m ViewController.m -o Payload/A13Exploit.app/A13Exploit
+          
+          # Copiar Recursos
+          cp index.html Payload/A13Exploit.app/
+          cp KernelBridge.dylib Payload/A13Exploit.app/
+          
+          # Criar o Info.plist básico
+          cat <<EOF > Payload/A13Exploit.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
           <plist version="1.0">
           <dict>
-              <key>get-task-allow</key><true/>
-              <key>task_for_pid-allow</key><true/>
-              <key>platform-application</key><true/>
-              <key>com.apple.private.security.no-sandbox</key><true/>
+              <key>CFBundleExecutable</key> <string>A13Exploit</string>
+              <key>CFBundleIdentifier</key> <string>com.kernel.a13exploit</string>
+              <key>CFBundleName</key> <string>A13 Exploit</string>
+              <key>CFBundlePackageType</key> <string>APPL</string>
+              <key>CFBundleShortVersionString</key> <string>1.0</string>
+              <key>LSRequiresIPhoneOS</key> <true/>
+              <key>MinimumOSVersion</key> <string>15.0</string>
           </dict>
           </plist>
           EOF
 
-      - name: Assinar Binário (Ldid)
+      - name: Pack IPA
         run: |
-          brew install ldid
-          ldid -Sents.plist KernelBridge.dylib
-          echo "[+] Binário assinado com permissões de Kernel."
+          zip -r A13Exploit.ipa Payload
+          echo "[+] IPA Gerado com Sucesso."
 
-      - name: Upload do Artefato
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KernelExploit-A13
-          path: KernelBridge.dylib
+          name: A13-Kernel-Exploit-IPA
+          path: A13Exploit.ipa
