@@ -1,0 +1,49 @@
+name: Build iOS Kernel Exploit (A13/26.4)
+
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: macos-latest # Garante o uso de máquinas Apple com Xcode
+
+    steps:
+      - name: Checkout Código
+        uses: actions/checkout@v4
+
+      - name: Configurar Xcode 26.4
+        run: sudo xcode-select -s /Applications/Xcode_17.app/Contents/Developer # Versão compatível com iOS 26
+
+      - name: Compilar Bridge Dylib (arch arm64e)
+        run: |
+          clang -arch arm64e \
+          -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
+          -framework Foundation -framework WebKit \
+          -dynamiclib KernelDriver.m -o KernelBridge.dylib
+          echo "[+] Dylib compilada para A13."
+
+      - name: Preparar Entitlements
+        run: |
+          cat <<EOF > ents.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+          <plist version="1.0">
+          <dict>
+              <key>get-task-allow</key><true/>
+              <key>task_for_pid-allow</key><true/>
+              <key>platform-application</key><true/>
+              <key>com.apple.private.security.no-sandbox</key><true/>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Assinar Binário (Ldid)
+        run: |
+          brew install ldid
+          ldid -Sents.plist KernelBridge.dylib
+          echo "[+] Binário assinado com permissões de Kernel."
+
+      - name: Upload do Artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: KernelExploit-A13
+          path: KernelBridge.dylib
