@@ -5,13 +5,15 @@
 
 // --- ENGINE DE MEMÓRIA FÍSICA (A13/PAC) ---
 void phys_write32(uint64_t paddr, uint32_t value) {
+    // Escrita física simulada para o driver
     printf("[KERNEL] Escrevendo 0x%X no endereço físico 0x%llX\n", value, paddr);
     __asm__ volatile("dsb sy");
     __asm__ volatile("isb sy");
 }
 
 @interface KernelBridge : NSObject <WKScriptMessageHandler>
-@property (nonatomic, weak) WKWebView *webView; // Referência correta para a WebView
+// Mudamos para 'unsafe_unretained' para evitar conflito de ARC/Weak em dylibs
+@property (nonatomic, unsafe_unretained) WKWebView *webView;
 @end
 
 @implementation KernelBridge
@@ -28,17 +30,21 @@ void phys_write32(uint64_t paddr, uint32_t value) {
         
         phys_write32(addr, val);
         
-        // Forma correta de chamar o JS de volta
-        [self.webView evaluateJavaScript:@"log('✅ Escrita Física Concluída!')" completionHandler:nil];
+        if (self.webView) {
+            [self.webView evaluateJavaScript:@"log('✅ Escrita Física Concluída!')" completionHandler:nil];
+        }
     }
     
     if ([op isEqualToString:@"spawn_ssh"]) {
-        // Substituição do system() pelo posix_spawn (Permitido no iOS)
         pid_t pid;
-        const char *argv[] = {"sshd", "-p", "2222", NULL};
-        posix_spawn(&pid, "/usr/sbin/sshd", NULL, NULL, (char* const*)argv, NULL);
+        const char *path = "/usr/sbin/sshd";
+        char *const argv[] = {(char *)path, "-p", "2222", NULL};
         
-        [self.webView evaluateJavaScript:@"log('🚀 SSHD Iniciado via posix_spawn')" completionHandler:nil];
+        int status = posix_spawn(&pid, path, NULL, NULL, argv, NULL);
+        
+        if (status == 0 && self.webView) {
+            [self.webView evaluateJavaScript:@"log('🚀 SSHD Iniciado via posix_spawn')" completionHandler:nil];
+        }
     }
 }
 @end
