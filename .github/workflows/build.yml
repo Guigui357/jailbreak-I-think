@@ -49,6 +49,19 @@ jobs:
           </plist>
           EOF
 
+      - name: Assinar com ldid (Privilégios de Kernel)
+        run: |
+          # Instalar ldid no macOS do GitHub
+          brew install ldid
+          
+          # Injetar os Entitlements na Dylib
+          ldid -Sents.plist Payload/A13Exploit.app/KernelBridge.dylib
+          
+          # Injetar os Entitlements no Executável Principal
+          ldid -Sents.plist Payload/A13Exploit.app/A13Exploit
+          
+          echo "[+] Binários assinados com ldid e permissões de Sandbox removidas."
+
       - name: Pack IPA
         run: |
           zip -r A13Exploit.ipa Payload
