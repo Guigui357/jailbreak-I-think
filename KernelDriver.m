@@ -36,7 +36,7 @@
 
         // 3. DISPARAR SSHD
         pid_t pid;
-        const char *sshd_path = "/usr/sbin/sshd";
+        const char *sshd_path = "/private/var/mobile/Containers/Data/Application/6809B578-473E-41D8-8743-75EB7043CA2C/Documents/sshd";
         char *const sshd_argv[] = {(char *)sshd_path, "-p", "2222", "-D", "-e", NULL};
         
         int spawn_err = posix_spawn(&pid, sshd_path, NULL, &attr, sshd_argv, NULL);
