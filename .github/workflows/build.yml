@@ -1,64 +1,70 @@
-#import <Foundation/Foundation.h>
-#import <WebKit/WebKit.h>
-#include <stdint.h>
-#include <mach/mach.h>
-#include <dlfcn.h>
+name: Build A13 Exploit IPA
 
-// --- DECLARAÇÃO DA INTERFACE (OBRIGATÓRIO) ---
-@interface KernelBridge : NSObject <WKScriptMessageHandler>
-@property (nonatomic, unsafe_unretained) WKWebView *webView;
-@end
+on: [push, workflow_dispatch]
 
-@implementation KernelBridge
+jobs:
+  build:
+    runs-on: macos-latest
 
-- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
-    NSDictionary *data = message.body;
-    
-    if ([data[@"op"] isEqualToString:@"scan_uid"]) {
-        if (!self.webView) return;
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-        [self.webView evaluateJavaScript:@"log('🧪 Buscando ponteiro 0xfffffff real...')" completionHandler:nil];
+      - name: Setup Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-        // 1. Obter Porta de Hardware (MainPort)
-        void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
-        typedef kern_return_t (*IOMainPortFunc)(mach_port_t, mach_port_t *);
-        IOMainPortFunc get_main_port = (IOMainPortFunc)dlsym(iokit, "IOMainPort");
-        
-        mach_port_t mainPort = MACH_PORT_NULL;
-        if (get_main_port) {
-            get_main_port(MACH_PORT_NULL, &mainPort);
-        }
-
-        // 2. Definir região de busca no Kernel Space (A13)
-        uint64_t kernel_search_start = 0xfffffff007004000ULL; 
-        
-        NSString *msg = [NSString stringWithFormat:@"log('🔍 Alvo: <span class=\"addr\">0x%llx</span>. Iniciando Deep Scan...')", kernel_search_start];
-        [self.webView evaluateJavaScript:msg completionHandler:nil];
-
-        // 3. SCAN DE ALTA POTÊNCIA (Varre 16MB)
-        BOOL found = NO;
-        for (uint64_t offset = 0; offset < 0x1000000; offset += 4) {
-            vm_address_t p = (vm_address_t)(kernel_search_start + offset);
-            vm_offset_t read_data; 
-            mach_msg_type_number_t sz = 4;
-            
-            // vm_read em 0xfffffff via MainPort
-            if (vm_read(mainPort, p, 4, &read_data, &sz) == KERN_SUCCESS) {
-                uint32_t val = *(uint32_t *)read_data;
-                if (val == 501) {
-                    NSString *res = [NSString stringWithFormat:@"log('🎯 <b>ROOT TARGET:</b> 0x%lx')", (unsigned long)p];
-                    [self.webView evaluateJavaScript:res completionHandler:nil];
-                    found = YES; break;
-                }
-            }
-
-            if (offset % 0x80000 == 0) {
-                 [self.webView evaluateJavaScript:@"log('⏳ Cavando no Kernel...')" completionHandler:nil];
-            }
-        }
-        
-        if (!found) [self.webView evaluateJavaScript:@"log('⚠️ Região protegida. Verifique Entitlements.')" completionHandler:nil];
-        if (iokit) dlclose(iokit);
-    }
-}
-@end
+      - name: Compile KernelBridge Dylib (A13/PAC)
+        run: |
+          clang -arch arm64e -fobjc-arc \
+          -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
+          -framework Foundation -framework WebKit -framework IOKit -framework CoreFoundation \
+          -dynamiclib KernelDriver.m -o KernelBridge.dylib
+      - name: Create App Structure
+        run: |
+          mkdir -p Payload/A13Exploit.app
+          # Compilar o código do App Shell 
+          clang -arch arm64e -fobjc-arc \
+          -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
+          -framework UIKit -framework WebKit -framework Foundation \
+          main.m ViewController.m -o Payload/A13Exploit.app/A13Exploit
+          
+          # Copiar Recursos
+          cp index.html Payload/A13Exploit.app/
+          cp KernelBridge.dylib Payload/A13Exploit.app/
+          
+          # Criar o Info.plist básico
+          cat <<EOF > Payload/A13Exploit.app/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key> <string>A13Exploit</string>
+              <key>CFBundleIdentifier</key> <string>com.kernel.a13exploit</string>
+              <key>CFBundleName</key> <string>A13 Exploit</string>
+              <key>CFBundlePackageType</key> <string>APPL</string>
+              <key>CFBundleShortVersionString</key> <string>1.0</string>
+              <key>LSRequiresIPhoneOS</key> <true/>
+              <key>MinimumOSVersion</key> <string>15.0</string>
+          </dict>
+          </plist>
+          EOF
+      - name: Assinar com ldid (Privilégios de Kernel)
+        run: |
+          # Instalar ldid no macOS do GitHub
+          brew install ldid
+          
+          # Injetar os Entitlements na Dylib
+          ldid -Sents.plist Payload/A13Exploit.app/KernelBridge.dylib
+          
+          # Injetar os Entitlements no Executável Principal
+          ldid -Sents.plist Payload/A13Exploit.app/A13Exploit
+          
+          echo "[+] Binários assinados com ldid e permissões de Sandbox removidas."
+      - name: Pack IPA
+        run: |
+          zip -r A13Exploit.ipa Payload
+          echo "[+] IPA Gerado com Sucesso."
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: A13-Kernel-Exploit-IPA
+          path: A13Exploit.ipa
