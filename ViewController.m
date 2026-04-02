@@ -2,7 +2,7 @@
 #import "KernelDriver.h"
 
 @interface ViewController ()
-@property (strong, nonatomic) WKWebView *webView;
+
 @property (strong, nonatomic) KernelDriver *driver; // Retenção FORTE é obrigatória
 @end
 
