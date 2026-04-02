@@ -3,31 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Catalyst-26 | A13 Lab</title>
+    <title>Catalyst-26 | A13 Kernel Lab</title>
     <style>
         body { background: #050505; color: #00ff41; font-family: 'Courier New', monospace; margin: 0; padding: 15px; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-        #header { font-size: 12px; border-bottom: 1px solid #1a1a1a; padding-bottom: 5px; margin-bottom: 10px; color: #555; display: flex; justify-content: space-between; }
-        #console { flex-grow: 1; overflow-y: auto; background: #000; border: 1px solid #111; padding: 10px; font-size: 11px; border-radius: 4px; box-shadow: inset 0 0 10px #001a00; }
-        .line { margin-bottom: 4px; word-break: break-all; }
-        .info { color: #8be9fd; }
-        .success { color: #50fa7b; }
-        .error { color: #ff5555; }
-        .warn { color: #f1fa8c; }
+        #header { font-size: 11px; border-bottom: 1px solid #1a1a1a; padding-bottom: 8px; margin-bottom: 10px; color: #444; display: flex; justify-content: space-between; text-transform: uppercase; }
+        #console { flex-grow: 1; overflow-y: auto; background: rgba(0, 5, 0, 0.9); border: 1px solid #111; padding: 12px; font-size: 12px; border-radius: 4px; box-shadow: inset 0 0 20px #000; }
+        .line { margin-bottom: 5px; word-break: break-all; border-left: 2px solid transparent; padding-left: 8px; }
+        .info { color: #8be9fd; border-left-color: #8be9fd; }
+        .success { color: #50fa7b; border-left-color: #50fa7b; font-weight: bold; }
+        .error { color: #ff5555; border-left-color: #ff5555; background: rgba(255,0,0,0.1); }
+        .warn { color: #f1fa8c; border-left-color: #f1fa8c; }
         .controls { margin-top: 15px; }
-        button { width: 100%; background: #000; color: #00ff41; border: 1px solid #00ff41; padding: 15px; font-weight: bold; border-radius: 4px; font-family: inherit; cursor: pointer; }
+        button { width: 100%; background: #000; color: #00ff41; border: 1px solid #00ff41; padding: 18px; font-weight: bold; border-radius: 4px; font-family: inherit; font-size: 14px; cursor: pointer; transition: 0.2s; }
         button:active { background: #00ff41; color: #000; }
-        button:disabled { border-color: #333; color: #333; cursor: not-allowed; }
+        button:disabled { border-color: #333; color: #333; cursor: wait; }
     </style>
 </head>
 <body>
 
     <div id="header">
         <span>[ EXPLOIT: CATALYST-26 ]</span>
-        <span>iOS 26.4 (A13)</span>
+        <span>BUILD: 23E5207q</span>
     </div>
 
     <div id="console">
-        <div class="line info">[*] Terminal pronto. Aguardando comando...</div>
+        <div class="line info">[*] Terminal Catalyst inicializado.</div>
     </div>
 
     <div class="controls">
@@ -46,50 +46,59 @@
             consoleEl.scrollTop = consoleEl.scrollHeight;
         }
 
+        // Tenta obter a ponte nativa com retry para evitar o erro 'is not a function'
+        async function getBridge() {
+            for (let i = 0; i < 10; i++) {
+                const b = window.webkit?.messageHandlers?.kernel;
+                if (b && typeof b.postMessageWithReply === 'function') return b;
+                await new Promise(r => setTimeout(r, 100)); // Aguarda 100ms e tenta de novo
+            }
+            return null;
+        }
+
         async function runExploit() {
             btn.disabled = true;
-            log("Iniciando Catalyst-26...", "warn");
+            log("Validando ponte nativa...", "warn");
 
-            // Verifica se a ponte nativa foi injetada corretamente
-            const bridge = window.webkit?.messageHandlers?.kernel;
+            const bridge = await getBridge();
 
-            if (!bridge || typeof bridge.postMessageWithReply !== 'function') {
-                log("CRITICAL: Ponte 'kernel' ou 'postMessageWithReply' não encontrada.", "error");
-                log("Verifique se usou addScriptMessageHandlerWithReply no ViewController.", "info");
+            if (!bridge) {
+                log("FALHA CRÍTICA: postMessageWithReply não injetado.", "error");
+                log("Verifique ViewController.m (addScriptMessageHandlerWithReply).", "info");
                 btn.disabled = false;
                 return;
             }
 
             try {
-                log("Estabelecendo handshake nativo...", "info");
+                log("Conexão estabelecida. Iniciando handshake...", "info");
                 const test = await bridge.postMessageWithReply({ action: "test_bridge" });
-                log(`Handshake: ${test.info}`, "success");
+                log(`RESPOSTA: ${test.info}`, "success");
 
-                log("Disparando PPL Bypass Race Condition...", "warn");
+                log("Disparando PPL Bypass Race Condition (IOGPU)...", "warn");
                 const res = await bridge.postMessageWithReply({ action: "pte_patch" });
 
                 if (res.status === "SUCCESS") {
-                    log(`KASLR BYPASS: Kernel Slide em ${res.slide}`, "success");
-                    log("ESCALADA: Privilégios ROOT obtidos.", "success");
-                    log(`SPAWN: SSHD iniciado (PID: ${res.pid || 'N/A'})`, "info");
-                    log("Pronto. Conecte via: ssh root@localhost -p 2222", "success");
+                    log(`KASLR: Slide detectado em ${res.slide}`, "success");
+                    log("PPL BYPASS: Tabelas de página mapeadas RW.", "success");
+                    log("PRIVILEGE: UID 0 (Root) escalado com sucesso.", "success");
+                    log(`SPAWN: SSHD ativo no PID ${res.pid || '?'}.`, "info");
+                    log("LAB: Conecte via 'ssh root@localhost -p 2222'", "success");
                 } else {
-                    log(`FALHA: ${res.info}`, "error");
+                    log(`FALHA NO EXPLOIT: ${res.info || "Erro desconhecido"}`, "error");
                 }
 
             } catch (err) {
-                log(`PANIC/EXCEPTION: ${err.message || err}`, "error");
-                console.error(err);
+                log(`ERRO DE EXECUÇÃO: ${err.message || err}`, "error");
+                log("Dica: Verifique se o app tem Entitlements de IOGPU.", "warn");
             } finally {
                 btn.disabled = false;
             }
         }
 
-        // Teste de inicialização silencioso
-        window.onload = () => {
-            if (window.webkit?.messageHandlers?.kernel) {
-                log("Conexão com KernelDriver estabelecida.", "success");
-            }
+        window.onload = async () => {
+            const bridge = await getBridge();
+            if (bridge) log("Catalyst-26 Bridge: ONLINE", "success");
+            else log("Aguardando injeção do KernelDriver...", "warn");
         };
     </script>
 </body>
