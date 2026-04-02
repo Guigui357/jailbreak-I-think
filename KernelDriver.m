@@ -1,9 +1,28 @@
 #import "KernelDriver.h"
 #import <CommonCrypto/CommonDigest.h>
+#import <mach/mach.h>
 #import <mach/mach_host.h>
+#import <mach/host_special_ports.h> // Define host_get_host_priv_port
+#import <mach/mach_vm.h>             // Necessário para operações de VM
+#import <mach/vm_map.h>              // Define vm_map e vm_deallocate
 #include <sys/wait.h>
 #include <unistd.h>
 #include <spawn.h>
+
+// Se o erro de vm_map persistir, adicione esta declaração externa:
+extern kern_return_t vm_map(
+    vm_map_t target_task,
+    vm_address_t *address,
+    vm_size_t size,
+    vm_address_t mask,
+    int flags,
+    mem_entry_name_port_t object,
+    memory_object_offset_t offset,
+    boolean_t copy,
+    vm_prot_t cur_protection,
+    vm_prot_t max_protection,
+    vm_inherit_t inheritance);
+
 
 @implementation KernelBridge {
     mach_port_t g_host_priv;
