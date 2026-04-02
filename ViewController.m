@@ -32,3 +32,4 @@
     NSURL *url = [[NSBundle mainBundle] URLForResource:@"index" withExtension:@"html"];
     [self.webView loadFileURL:url allowingReadAccessToURL:url.URLByDeletingLastPathComponent];
 }
+@end
