@@ -5,25 +5,26 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
 
-    // 1. Instancia o motor PRIMEIRO (Garante que a propriedade strong segure o objeto)
+    // 1. Instancia o motor PRIMEIRO na propriedade STRONG
     self.kernelBridge = [[KernelBridge alloc] init];
 
-    // 2. Configura a WebView
+    // 2. Configura a ponte ANTES de criar a WebView
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     
-    // Injeta o handler. O nome "kernel" deve ser EXATAMENTE igual ao do JS.
+    // O nome "kernel" deve ser exatamente igual ao do JS
     [config.userContentController addScriptMessageHandlerWithReply:self.kernelBridge 
                                                       contentWorld:WKContentWorld.pageWorld 
                                                               name:@"kernel"];
 
-    // 3. Inicializa a WebView com a config injetada
+    // 3. Cria a WebView com a config que já contém o handler
     self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
     [self.view addSubview:self.webView];
 
-    // 4. Carrega o HTML do Bundle
+    // 4. Carrega o HTML
     NSURL *url = [[NSBundle mainBundle] URLForResource:@"index" withExtension:@"html"];
     if (url) {
         [self.webView loadFileURL:url allowingReadAccessToURL:url.URLByDeletingLastPathComponent];
     }
 }
+
 @end
