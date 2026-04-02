@@ -1,130 +1,16 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Kernel Lab A13 - Console</title>
-    <style>
-        body { 
-            background: #050505; 
-            color: #00ff41; 
-            font-family: 'Courier New', Courier, monospace; 
-            margin: 0; 
-            padding: 20px; 
-            display: flex; 
-            flex-direction: column; 
-            height: 100vh; 
-            box-sizing: border-box; 
-        }
-        h2 { font-size: 1.1rem; border-bottom: 1px solid #00ff41; padding-bottom: 8px; margin-top: 0; text-align: center; }
-        #console { 
-            flex-grow: 1; 
-            overflow-y: auto; 
-            border: 1px solid #333; 
-            padding: 12px; 
-            background: rgba(0, 10, 0, 0.9); 
-            font-size: 12px; 
-            line-height: 1.6; 
-            margin-bottom: 15px; 
-            border-radius: 4px;
-        }
-        .entry { margin-bottom: 4px; }
-        .success { color: #50fa7b; font-weight: bold; }
-        .error { color: #ff5555; font-weight: bold; }
-        .info { color: #8be9fd; }
-        .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        button { 
-            background: #111; 
-            color: #00ff41; 
-            border: 1px solid #00ff41; 
-            padding: 14px; 
-            font-family: inherit; 
-            font-weight: bold; 
-            border-radius: 4px; 
-            cursor: pointer; 
-            text-transform: uppercase;
-        }
-        button:active { background: #00ff41; color: #000; }
-        button:disabled { border-color: #444; color: #444; cursor: not-allowed; }
-    </style>
-</head>
-<body>
+<button onclick="applyPTE()" style="background:red; color:white;">APPLY PTE BYPASS</button>
 
-    <h2>[ KERNEL_LAB_A13_IOS26 ]</h2>
-
-    <div id="console">
-        <div class="entry info">[*] Sistema de monitoramento ativo.</div>
-        <div class="entry info">[*] Aguardando gatilho do KernelDriver...</div>
-    </div>
-
-    <div class="btn-group">
-        <button id="btnScan" onclick="runScan()">Scan KASLR</button>
-        <button id="btnRoot" onclick="runRoot()" style="border-color: #ff5555; color: #ff5555;">Gain Root</button>
-    </div>
-
-    <script>
-        const consoleLog = document.getElementById('console');
-        const btnScan = document.getElementById('btnScan');
-        const btnRoot = document.getElementById('btnRoot');
-
-        function log(msg, type = '') {
-            const div = document.createElement('div');
-            div.className = `entry ${type}`;
-            div.innerHTML = `> ${msg}`;
-            consoleLog.appendChild(div);
-            consoleLog.scrollTop = consoleLog.scrollHeight;
-        }
-
-        // Função de ponte com o Objective-C
-        async function callKernel(action, data = {}) {
-            try {
-                const response = await window.webkit.messageHandlers.kernel.postMessageWithReply({
-                    action: action,
-                    ...data
-                });
-                return response;
-            } catch (err) {
-                log("ERRO: A ponte nativa foi encerrada (SIGKILL/Panic).", "error");
-                throw err;
-            }
-        }
-
-        async function runScan() {
-            btnScan.disabled = true;
-            log("⏳ Iniciando varredura KASLR no A13...", "info");
-            
-            try {
-                const res = await callKernel("scan");
-                if (res.value === "FALLBACK_ERROR" || res.value === "0x0" || res.value === "SANDBOX_BLOCK_OR_NOT_FOUND") {
-                    log("❌ Falha: O iOS Sandbox bloqueou a leitura física.", "error");
-                } else {
-                    log(`✅ SUCESSO! Kernel Slide: ${res.value}`, "success");
-                    log(`📍 Endereço Real: 0x${(BigInt(res.value) + 0xFFFFFFF007004000n).toString(16)}`, "success");
-                }
-            } catch (e) {
-                // Erro já tratado na função callKernel
-            } finally {
-                btnScan.disabled = false;
-            }
-        }
-
-        async function runRoot() {
-            btnRoot.disabled = true;
-            log("☢️ Tentando sobrescrever credenciais (ucred)...", "error");
-            
-            try {
-                const res = await callKernel("root");
-                if (res.status === "ROOT_SUCCESS") {
-                    log("🏆 SUCESSO! UID 0 obtido. Sandbox desativada.", "success");
-                } else {
-                    log("❌ FALHA: Proteção PPL/PAC impediu a escrita.", "error");
-                }
-            } catch (e) {
-                log("💥 Reboot detectado ou App encerrado pelo AMFI.", "error");
-            } finally {
-                btnRoot.disabled = false;
-            }
-        }
-    </script>
-</body>
-</html>
+<script>
+async function applyPTE() {
+    log("⚠️ Tentando quebrar PPL via PTE Patch...");
+    try {
+        const res = await window.webkit.messageHandlers.kernel.postMessageWithReply({
+            action: "pte_patch",
+            addr: "0xFFFFFFF007004000" // Alvo: Header do Kernel
+        });
+        log("✅ PTE Modificada. Kernel agora é RW!");
+    } catch(e) {
+        log("💥 PANIC: O hardware PPL detectou a modificação.");
+    }
+}
+</script>
