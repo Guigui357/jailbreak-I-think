@@ -1,30 +1,29 @@
 #import "ViewController.h"
 
-@implementation ViewController
+@implementation ViewController {
+    KernelBridge *_strongBridge; // Referência REALMENTE forte
+}
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-
-    // 1. Instancia o motor PRIMEIRO na propriedade STRONG
-    self.kernelBridge = [[KernelBridge alloc] init];
-
-    // 2. Configura a ponte ANTES de criar a WebView
+    
+    // 1. Criar o motor ANTES de tudo
+    _strongBridge = [[KernelBridge alloc] init];
+    
+    // 2. Configurar a injeção
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     
-    // O nome "kernel" deve ser exatamente igual ao do JS
-    [config.userContentController addScriptMessageHandlerWithReply:self.kernelBridge 
+    // O nome DEVE ser "kernel" (minúsculo)
+    [config.userContentController addScriptMessageHandlerWithReply:_strongBridge 
                                                       contentWorld:WKContentWorld.pageWorld 
                                                               name:@"kernel"];
 
-    // 3. Cria a WebView com a config que já contém o handler
+    // 3. Criar a WebView com essa config
     self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
     [self.view addSubview:self.webView];
-
-    // 4. Carrega o HTML
+    
+    // 4. Carregar o HTML
     NSURL *url = [[NSBundle mainBundle] URLForResource:@"index" withExtension:@"html"];
-    if (url) {
-        [self.webView loadFileURL:url allowingReadAccessToURL:url.URLByDeletingLastPathComponent];
-    }
+    [self.webView loadFileURL:url allowingReadAccessToURL:url.URLByDeletingLastPathComponent];
 }
-
 @end
