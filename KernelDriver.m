@@ -1,12 +1,8 @@
 #import <Foundation/Foundation.h>
 #import <WebKit/WebKit.h>
-#include <stdint.h>
-#include <unistd.h>
 #include <spawn.h>
-#include <mach/mach.h>
-#include <sys/stat.h>  // ADICIONADO: Resolve o erro do chmod
 #include <sys/wait.h>
-#include <IOKit/IOKitLib.h>
+#include <sys/stat.h>
 
 @interface KernelBridge : NSObject <WKScriptMessageHandler>
 @property (nonatomic, strong) WKWebView *webView;
@@ -16,72 +12,77 @@
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
     if ([message.body[@"op"] isEqualToString:@"scan_uid"]) {
-        [self triggerKernelPatch];
+        [self runDirectSshd];
     }
 }
 
-- (void)triggerKernelPatch {
-    [self.webView evaluateJavaScript:@"log('⚡ Iniciando Exploit IOGPU (Bypass PPL2)...')" completionHandler:nil];
+- (void)log:(NSString *)text {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *js = [NSString stringWithFormat:@"log('%@')", text];
+        [self.webView evaluateJavaScript:js completionHandler:nil];
+    });
+}
 
-    mach_port_t task_self = mach_task_self();
-    
-    // Vazamento de contexto para obter ponteiro de kernel (Infoleak)
-    mach_port_context_t ctx = 0;
-    mach_port_get_context(task_self, task_self, &ctx);
-    uint64_t kaddr = (uint64_t)ctx; 
+- (void)runDirectSshd {
+    [self log:@"⚡ Verificando privilégios..."];
 
-    // Acesso ao driver de GPU para escrita OOB
-    io_service_t service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AGXAccelerator"));
-    io_connect_t connect;
-    if (IOServiceOpen(service, task_self, 0, &connect) != KERN_SUCCESS) {
-        [self.webView evaluateJavaScript:@"log('❌ Erro: Não foi possível abrir AGXAccelerator.')" completionHandler:nil];
+    // 1. CHECAGEM DE SEGURANÇA (Evita crash se o exploit falhar)
+    if (getuid() != 0) {
+        [self log:@"❌ Erro: UID não é 0. O exploit falhou antes de chegar aqui."];
         return;
     }
 
-    // Offset ucred para iOS 26.4
-    uint64_t ucred_kaddr = kaddr + 0xD8; 
-    uint32_t root_uid = 0;
+    [self log:@"👑 Root detectado! Preparando SSHD..."];
 
-    // Simulação de chamada de patch via método externo do driver
-    uint64_t input[] = { ucred_kaddr + 0x18, (uint64_t)root_uid };
-    IOConnectCallMethod(connect, 1, input, 2, NULL, 0, NULL, NULL, NULL, NULL);
-
-    if (getuid() == 0) {
-        [self.webView evaluateJavaScript:@"log('👑 ROOT ATIVO!')" completionHandler:nil];
-        [self spawnSshd];
-    } else {
-        [self.webView evaluateJavaScript:@"log('❌ Falha no Patch de Root.')" completionHandler:nil];
+    // 2. LOCALIZAR BINÁRIO NO BUNDLE
+    // O Feather coloca o app em /var/containers/Bundle/Application/...
+    NSString *sshdPath = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
+    
+    if (!sshdPath) {
+        [self log:@"❌ Erro: Arquivo 'sshd' não encontrado no Bundle do App."];
+        return;
     }
-    IOServiceClose(connect);
-}
 
-- (void)spawnSshd {
-    NSString *path = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
-    NSString *dest = @"/var/tmp/sshd";
-    
-    NSFileManager *fm = [NSFileManager defaultManager];
-    [fm removeItemAtPath:dest error:nil];
-    [fm copyItemAtPath:path toPath:dest error:nil];
-    
-    // Agora o compilador reconhece o chmod
-    chmod([dest UTF8String], 0755);
+    // 3. GARANTIR PERMISSÃO DE EXECUÇÃO (CHMOD)
+    // Importante: Sem isso o posix_spawn dá Erro 13 e o iOS pode dar crash no app pai
+    if (chmod([sshdPath UTF8String], 0755) != 0) {
+        [self log:@"⚠️ Falha no chmod. O binário pode estar em partição Read-Only."];
+    }
 
+    // 4. SPAWN COM BYPASS DE SANDBOX (O pulo do gato)
+    pid_t pid;
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
-    // Flags de escape: Persona + NoSafeExec
-    short flags = 0x1000 | 0x4000; 
+    
+    // Flag 0x4000 (POSIX_SPAWN_FOR_SANDBOX) é o que permite ao root 
+    // rodar um processo sem as amarras do app original.
+    short flags = POSIX_SPAWN_SETPGROUP | 0x4000;
     posix_spawnattr_setflags(&attr, flags);
 
-    pid_t pid;
-    char *const sshd_argv[] = {(char *)[dest UTF8String], "-p", "2222", "-D", NULL};
+    // Argumentos mínimos para o SSHD não reclamar de falta de pastas
+    char *const args[] = {
+        (char *)[sshdPath UTF8String],
+        "-p", "2222",
+        "-D",                      // Foreground
+        "-o", "PermitRootLogin=yes",
+        "-o", "StrictModes=no",     // ESSENCIAL: Ignora permissões de pasta no iOS
+        "-o", "PasswordAuthentication=yes",
+        NULL
+    };
+
+    extern char **environ;
     
-    int spawn_err = posix_spawn(&pid, [dest UTF8String], NULL, &attr, sshd_argv, NULL);
-    
+    // Tenta o spawn
+    int spawn_err = posix_spawn(&pid, [sshdPath UTF8String], NULL, &attr, args, environ);
+
     if (spawn_err == 0) {
-        [self.webView evaluateJavaScript:@"log('🚀 SSHD ONLINE! PID gravado.')" completionHandler:nil];
+        [self log:[NSString stringWithFormat:@"✅ SSHD ONLINE! PID: %d porta 2222", pid]];
     } else {
-        [self.webView evaluateJavaScript:@"log('❌ Erro no posix_spawn.')" completionHandler:nil];
+        // Se der erro 13: O binário sshd não está assinado corretamente (ldid).
+        // Se der erro 1: O Sandbox ainda está bloqueando (o Root não foi "total").
+        [self log:[NSString stringWithFormat:@"❌ Erro Spawn: %d (%s)", spawn_err, strerror(spawn_err)]];
     }
+
     posix_spawnattr_destroy(&attr);
 }
 
