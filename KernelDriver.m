@@ -3,6 +3,16 @@
 #import <mach/mach_host.h>
 #import <unistd.h>
 
+// Definições obrigatórias para o compilador (A13 / iOS 26.4)
+#ifndef KERN_BASE_STATIC
+#define KERN_BASE_STATIC 0xFFFFFFF007004000
+#endif
+
+#ifndef PAGE_SIZE_A13
+#define PAGE_SIZE_A13 0x4000
+#endif
+
+@implementation KernelBridge
 @implementation KernelBridge
 
 // LEITURA REAL (A13)
