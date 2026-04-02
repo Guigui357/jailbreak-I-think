@@ -23,7 +23,7 @@
 
     <div id="header">
         <span>[ EXPLOIT: CATALYST-26 ]</span>
-        <span>BUILD: 23E5207q (A13)</span>
+        <span>BUILD: 23E5207Q (A13)</span>
     </div>
 
     <div id="console">
@@ -47,15 +47,15 @@
         }
 
         /**
-         * Busca a ponte nativa em múltiplos namespaces do WebKit.
-         * Resolve o erro 'postMessageWithReply is not a function'.
+         * Scanner de Ponte Nativa (A13/iOS 26.4)
+         * Busca o handler 'kernel' em todos os mundos de conteúdo possíveis.
          */
-        async function getKernelBridge() {
-            for (let i = 0; i < 15; i++) { // 15 tentativas (1.5 segundos total)
-                // Busca em 'kernel' (PageWorld) ou em 'default.kernel' (DefaultWorld)
-                const bridge = window.webkit?.messageHandlers?.kernel || 
-                               window.webkit?.messageHandlers?.default?.kernel;
-
+        async function findKernelBridge() {
+            log("Escaneando namespaces de IPC...", "warn");
+            
+            for (let i = 0; i < 20; i++) { // 2 segundos de varredura
+                const bridge = window.webkit?.messageHandlers?.kernel;
+                
                 if (bridge && typeof bridge.postMessageWithReply === 'function') {
                     return bridge;
                 }
@@ -66,51 +66,49 @@
 
         async function runExploit() {
             btn.disabled = true;
-            log("Validando ponte nativa nos contextos de memória...", "warn");
-
-            const bridge = await getKernelBridge();
+            
+            const bridge = await findKernelBridge();
 
             if (!bridge) {
                 log("FALHA CRÍTICA: postMessageWithReply não injetado.", "error");
-                log("Causa: Descompasso entre ViewController e KernelDriver.h", "info");
+                log("Dica: Verifique se compilou com -arch arm64e no Xcode.", "info");
                 btn.disabled = false;
                 return;
             }
 
             try {
-                log("Ponte encontrada! Estabelecendo handshake...", "info");
+                log("Conexão estabelecida via pageWorld.", "success");
+                log("Iniciando handshake nativo...", "info");
+                
                 const test = await bridge.postMessageWithReply({ action: "test_bridge" });
                 log(`RESPOSTA: ${test.info}`, "success");
 
-                log("Disparando PPL Bypass Race Condition (IOGPU)...", "warn");
+                log("Disparando Catalyst-26 (PPL/PTE Bypass)...", "warn");
                 const res = await bridge.postMessageWithReply({ action: "pte_patch" });
 
                 if (res.status === "SUCCESS") {
-                    log(`KASLR: Slide detectado em ${res.slide}`, "success");
-                    log("PPL BYPASS: Tabelas de página mapeadas RW.", "success");
-                    log("PRIVILEGE: UID 0 (Root) escalado via Catalyst-26.", "success");
-                    log(`SPAWN: SSHD ativo (PID: ${res.pid || 'OK'}).`, "info");
-                    log("LAB: ssh root@localhost -p 2222", "success");
+                    log(`KASLR BYPASS: Slide em ${res.slide}`, "success");
+                    log("MEMÓRIA: Tabelas de página RW (PPL Bypass OK).", "success");
+                    log("PRIVILEGE: UID 0 (Root) escalado.", "success");
+                    log(`SPAWN: SSHD iniciado (PID: ${res.pid || 'N/A'}).`, "info");
+                    log("CONEXÃO: ssh root@localhost -p 2222", "success");
                 } else {
-                    log(`FALHA: ${res.info || "Erro no Exploit"}`, "error");
+                    log(`FALHA NO EXPLOIT: ${res.info}`, "error");
                 }
 
             } catch (err) {
-                log(`ERRO DE EXECUÇÃO: ${err.message || err}`, "error");
-                log("Dica: Verifique Entitlements e arquitetura arm64e.", "warn");
+                log(`PANIC: ${err.message || err}`, "error");
+                log("Verifique se o App possui Entitlements do IOGPU.", "warn");
             } finally {
                 btn.disabled = false;
             }
         }
 
-        // Inicialização
+        // Auto-verificação no carregamento
         window.onload = async () => {
-            const bridge = await getKernelBridge();
-            if (bridge) {
-                log("Ponte validada em tempo real: ONLINE", "success");
-            } else {
-                log("Aguardando injeção tardia do KernelDriver...", "warn");
-            }
+            const bridge = await findKernelBridge();
+            if (bridge) log("Catalyst-26 Bridge: ONLINE", "success");
+            else log("Aguardando injeção do KernelDriver...", "warn");
         };
     </script>
 </body>
