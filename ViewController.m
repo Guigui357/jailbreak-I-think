@@ -11,15 +11,15 @@
     [super viewDidLoad];
     _driver = [[KernelDriver alloc] init];
     
-    WKUserContentController *userContentController = [[WKUserContentController alloc] init];
+    WKUserContentController *userCC = [[WKUserContentController alloc] init];
     
-    // O SEGREDO: addScriptMessageHandlerWithReply + pageWorld
-    [userContentController addScriptMessageHandlerWithReply:self.driver 
-                                               contentWorld:[WKContentWorld pageWorld] 
-                                                       name:@"kernel"];
+    // CRITICAL: addScriptMessageHandlerWithReply habilita o método no JS
+    [userCC addScriptMessageHandlerWithReply:self.driver 
+                                contentWorld:[WKContentWorld pageWorld] 
+                                        name:@"kernel"];
     
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
-    config.userContentController = userContentController;
+    config.userContentController = userCC;
     
     self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
     [self.view addSubview:self.webView];
