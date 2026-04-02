@@ -8,6 +8,6 @@
 @property (nonatomic, strong) WKWebView *webView;
 
 // A instância do motor que processará o kread64 e o SSHD
-@property (nonatomic, strong) KernelBridge *kernelBridge;
+@property (nonatomic, strong) KernelDriver *kernelBridge;
 
 @end
