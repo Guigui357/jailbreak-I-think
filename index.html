@@ -3,51 +3,51 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Kernel Lab Console</title>
+    <title>A13 Kernel Lab Console</title>
     <style>
         body { 
             background: #050505; 
             color: #00ff41; 
-            font-family: 'Courier New', monospace; 
+            font-family: 'Courier New', Courier, monospace; 
             margin: 0; 
             padding: 15px; 
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
+            display: flex; 
+            flex-direction: column; 
             height: 100vh;
+            overflow: hidden;
         }
-        #header { font-size: 14px; border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 10px; color: #888; }
+        #header { font-size: 13px; border-bottom: 1px solid #222; padding-bottom: 8px; margin-bottom: 10px; color: #666; }
         
-        /* O Terminal de Logs */
         #console { 
             flex-grow: 1; 
             overflow-y: auto; 
-            background: rgba(0, 15, 0, 0.95); 
-            border: 1px solid #222; 
+            background: rgba(0, 10, 0, 0.95); 
+            border: 1px solid #1a1a1a; 
             padding: 10px; 
             font-size: 12px; 
             border-radius: 4px;
-            box-shadow: inset 0 0 10px #000;
+            box-shadow: inset 0 0 15px #000;
         }
 
-        .line { margin-bottom: 4px; word-break: break-all; }
+        .line { margin-bottom: 5px; word-break: break-all; }
         .info { color: #8be9fd; }    /* Azul */
-        .success { color: #50fa7b; } /* Verde brilhante */
+        .success { color: #50fa7b; } /* Verde */
         .error { color: #ff5555; }   /* Vermelho */
         .warn { color: #f1fa8c; }    /* Amarelo */
 
-        .btn-container { margin-top: 15px; display: grid; grid-template-columns: 1fr; gap: 10px; }
+        .controls { margin-top: 15px; display: grid; grid-template-columns: 1fr; gap: 10px; }
         button { 
-            background: #111; 
+            background: #0a0a0a; 
             color: #00ff41; 
             border: 1px solid #00ff41; 
-            padding: 15px; 
+            padding: 16px; 
             font-weight: bold; 
             text-transform: uppercase;
             border-radius: 4px;
+            font-family: inherit;
         }
         button:active { background: #00ff41; color: #000; }
-        button:disabled { border-color: #444; color: #444; }
+        button:disabled { border-color: #333; color: #333; }
     </style>
 </head>
 <body>
@@ -55,48 +55,78 @@
     <div id="header">[ DISPOSITIVO: iPHONE 11 (A13) - iOS 26.4 ]</div>
 
     <div id="console">
-        <div class="line info">[*] Sistema inicializado. Pronto para Scan.</div>
+        <div class="line info">[*] Sistema inicializado. Pronto para interagir.</div>
     </div>
 
-    <div class="btn-container">
-        <button id="mainBtn" onclick="executePTEBypass()">Apply PTE Bypass</button>
+    <div class="controls">
+        <button id="mainBtn" onclick="executeExploit()">Apply PTE Bypass / Scan</button>
     </div>
 
     <script>
         const consoleEl = document.getElementById('console');
         const mainBtn = document.getElementById('mainBtn');
 
-        // Função de LOG universal para o HTML
+        // Função de LOG universal
         function log(msg, type = 'info') {
             const div = document.createElement('div');
             div.className = `line ${type}`;
             div.innerHTML = `> ${msg}`;
             consoleEl.appendChild(div);
-            // Auto-scroll para o final
             consoleEl.scrollTop = consoleEl.scrollHeight;
         }
 
-        async function executePTEBypass() {
-            log("⏳ Testando conexão com o Driver...", "warn");
-            try {
-                // Primeiro teste se a ponte existe
-                const test = await window.webkit.messageHandlers.kernel.postMessageWithReply({
-                action: "test_bridge"
-            });
-            log("✅ " + test.info, "success");
-
-            // Se a ponte estiver OK, tenta o Kernel
-            log("⏳ Solicitando leitura de memória...", "info");
-            const res = await window.webkit.messageHandlers.kernel.postMessageWithReply({
-                action: "pte_patch"
-            });
-            log("Resultado: " + res.status);
-
-            } catch (err) {
-                log("❌ A ponte falhou. Verifique se o nome 'kernel' está correto no ViewController.m", "error");
-            }
+        // Verifica a presença da ponte 'kernel'
+        function checkBridge() {
+            return (window.webkit && 
+                    window.webkit.messageHandlers && 
+                    window.webkit.messageHandlers.kernel);
         }
 
+        async function executeExploit() {
+            mainBtn.disabled = true;
+            log("🔍 Verificando injeção da ponte...", "warn");
+
+            // Aguarda um curto período para garantir a injeção do WebKit
+            await new Promise(r => setTimeout(r, 400));
+
+            if (!checkBridge()) {
+                log("❌ ERRO: Objeto 'kernel' não detectado.", "error");
+                log("Handlers: [" + Object.keys(window.webkit?.messageHandlers || {}) + "]", "info");
+                log("Verifique o ViewController.m e a retenção de memória.", "warn");
+                mainBtn.disabled = false;
+                return;
+            }
+
+            log("✅ Ponte detectada. Testando conexão nativa...", "success");
+
+            try {
+                // 1. TESTE DE CONEXÃO
+                const test = await window.webkit.messageHandlers.kernel.postMessageWithReply({
+                    action: "test_bridge"
+                });
+                log(`✅ Resposta: ${test.info}`, "success");
+
+                // 2. OPERAÇÃO DE KERNEL (SCAN / PTE)
+                log("⏳ Solicitando Scan de Memória (KASLR Bypass)...", "info");
+                const res = await window.webkit.messageHandlers.kernel.postMessageWithReply({
+                    action: "pte_patch",
+                    addr: "0xFFFFFFF007004000"
+                });
+
+                if (res.status === "SUCCESS") {
+                    log(`🚀 Kernel Slide: ${res.slide}`, "success");
+                    log("📍 Memória mapeada como RW.", "info");
+                } else {
+                    log(`⚠️ Falha: ${res.info || res.status}`, "warn");
+                }
+
+            } catch (err) {
+                log("💥 CRITICAL: A ponte caiu (SIGKILL/Panic).", "error");
+                log("Detalhe: " + err, "info");
+            } finally {
+                mainBtn.disabled = false;
+            }
+        }
     </script>
 </body>
 </html>
