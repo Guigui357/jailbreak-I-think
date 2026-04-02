@@ -2,8 +2,7 @@
 #import "KernelDriver.h"
 
 @interface ViewController ()
-// RETENÇÃO FORTE: Impede que a ponte morra após o carregamento
-@property (strong, nonatomic) KernelDriver *driver; 
+@property (strong, nonatomic) KernelDriver *driver;
 @end
 
 @implementation ViewController
@@ -11,23 +10,28 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     
-    // 1. Instância FORTE (Propriedade da classe)
+    // 1. Instância do Driver (Retenção forte via property)
     self.driver = [[KernelDriver alloc] init];
     
-    // 2. Configuração com o Handler ANTES da WebView existir
+    // 2. Configuração da Ponte (WKContentWorld pageWorld é o correto)
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
-    
-    // USAR defaultWorld para arquivos locais (file://) no iOS 26.4
     [config.userContentController addScriptMessageHandlerWithReply:self.driver 
-                                                      contentWorld:[WKContentWorld defaultWorld] 
+                                                      contentWorld:[WKContentWorld pageWorld] 
                                                               name:@"kernel"];
     
-    // 3. Habilitar acessos universais para o exploit
+    // 3. Permissões de arquivo para o exploit
+    [config.preferences setValue:@YES forKey:@"allowFileAccessFromFileURLs"];
     [config setValue:@YES forKey:@"allowUniversalAccessFromFileURLs"];
 
+    // 4. Inicializar WebView com a config pronta
     self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
     [self.view addSubview:self.webView];
     
+    // 5. Carregar o HTML do Lab
     NSURL *url = [[NSBundle mainBundle] URLForResource:@"index" withExtension:@"html"];
-    [self.webView loadFileURL:url allowingReadAccessToURL:url.URLByDeletingLastPathComponent];
+    if (url) {
+        [self.webView loadFileURL:url allowingReadAccessToURL:url.URLByDeletingLastPathComponent];
+    }
 }
+
+@end
