@@ -5,6 +5,9 @@
 #include <mach/mach.h>
 #include <sys/wait.h>
 
+// Definição manual da função restrita
+extern kern_return_t host_get_priv_port(mach_port_t host, mach_port_t *priv);
+
 @interface KernelBridge : NSObject <WKScriptMessageHandler>
 @property (nonatomic, strong) WKWebView *webView;
 @end
