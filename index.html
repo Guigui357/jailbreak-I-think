@@ -1,118 +1,32 @@
 <!DOCTYPE html>
-<html>
+<html lang="pt">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Kernel Lab v26.4</title>
     <style>
-        body { background: #000; color: #00ff41; font-family: 'Courier New', monospace; margin: 0; padding: 15px; overflow: hidden; }
-        #terminal { border: 1px solid #00ff41; height: 380px; overflow-y: auto; padding: 10px; font-size: 11px; background: rgba(0,20,0,0.9); border-radius: 5px; margin-bottom: 15px; box-shadow: 0 0 15px rgba(0,255,65,0.2); }
-        .cmd { color: #fff; font-weight: bold; }
-        .success { color: #50fa7b; }
-        .error { color: #ff5555; }
-        .info { color: #8be9fd; }
-        .btn-container { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        button { background: #000; color: #00ff41; border: 1px solid #00ff41; padding: 15px; font-family: inherit; font-weight: bold; border-radius: 4px; cursor: pointer; }
-        button:active { background: #00ff41; color: #000; }
-        button:disabled { border-color: #333; color: #333; }
+        body { background: #000; color: #0f0; font-family: monospace; padding: 20px; }
+        #console { border: 1px solid #0f0; height: 300px; overflow-y: auto; padding: 10px; font-size: 12px; }
+        .btn { border: 1px solid #0f0; background: #000; color: #0f0; width: 100%; padding: 15px; margin-top: 10px; cursor: pointer; }
     </style>
 </head>
 <body>
-
-    <div style="text-align: center; margin-bottom: 10px;">[ A13_KERNEL_EXPLOIT_UI ]</div>
-
-    <div id="terminal">
-        <div class="info">[*] Memória carregada. Aguardando gatilho...</div>
-        <div class="info">[*] Offset Base: 0xFFFFFFF007004000</div>
-    </div>
-
-    <div class="btn-container">
-        <button id="btnScan" onclick="runKernelBypass()">SCAN KASLR</button>
-        <button id="btnSsh" onclick="triggerSSHD()" style="border-color: #ff5555; color: #ff5555;">LAUNCH SSHD</button>
-    </div>
+    <h2>[ KERNEL_LAB_A13 ]</h2>
+    <div id="console">> Sistema inicializado.</div>
+    <button class="btn" onclick="startScan()">1. QUEBRAR KASLR</button>
+    <button class="btn" onclick="gainRoot()" style="color: #f00; border-color: #f00;">2. ESCALONAR PARA ROOT</button>
 
     <script>
-        const term = document.getElementById('terminal');
-        const btnScan = document.getElementById('btnScan');
+        const log = (m) => { document.getElementById('console').innerHTML += `<br>> ${m}`; };
 
-        function log(msg, type = '') {
-            const div = document.createElement('div');
-            div.className = type;
-            div.innerHTML = `<span class="cmd">></span> ${msg}`;
-            term.appendChild(div);
-            term.scrollTop = term.scrollHeight;
+        async function startScan() {
+            log("⏳ Varrendo memória...");
+            const res = await window.webkit.messageHandlers.kernel.postMessageWithReply({action: "scan"});
+            log(`✅ Kernel Slide: ${res.value}`);
         }
 
-        // 1. COMUNICAÇÃO COM O KERNELDRIVER.M
-        async function kread64(address) {
-            try {
-                // Chama o Handler 'kernel' definido no ViewController.m
-                const result = await window.webkit.messageHandlers.kernel.postMessageWithReply({
-                    action: "read64",
-                    address: address
-                });
-                return BigInt(result.value);
-            } catch (e) {
-                return null;
-            }
-        }
-
-        // 2. BUSCA DO KERNEL SLIDE (KASLR BYPASS)
-        async function runKernelBypass() {
-            btnScan.disabled = true;
-            log("⏳ Iniciando varredura KASLR...", "info");
-            
-            const STATIC_BASE = 0xFFFFFFF007004000n;
-            const PAGE = 0x4000n; // Alinhamento A13
-            const MAGIC = 0xfeedfacfn;
-
-            for (let i = 0n; i < 8000n; i++) {
-                let currentAddr = STATIC_BASE + (i * PAGE);
-                
-                if (i % 500n === 0n) {
-                    log(`Verificando: 0x${currentAddr.toString(16)}...`);
-                    await new Promise(r => setTimeout(r, 5)); // Evita travar a UI
-                }
-
-                let val = await kread64(currentAddr.toString(16));
-
-                if (val === null) {
-                    log("❌ Erro de Ponte: Sandbox ativa.", "error");
-                    btnScan.disabled = false;
-                    return;
-                }
-
-                if (val === 0xDEADBEEFn) {
-                    log("❌ Falha: host_priv negada pelo Kernel.", "error");
-                    btnScan.disabled = false;
-                    return;
-                }
-
-                if ((val & 0xFFFFFFFFn) === MAGIC) {
-                    log("✅ KERNEL HEADER ENCONTRADO!", "success");
-                    log(`📍 Endereço: 0x${currentAddr.toString(16)}`, "success");
-                    log(`🚀 Slide: 0x${(i * PAGE).toString(16)}`, "success");
-                    btnScan.disabled = false;
-                    return;
-                }
-            }
-            log("❌ Fim da varredura: Slide não localizado.", "error");
-            btnScan.disabled = false;
-        }
-
-        // 3. EXECUÇÃO DO SSHD
-        async function triggerSSHD() {
-            log("💉 Injetando TrustCache...", "info");
-            try {
-                const res = await window.webkit.messageHandlers.kernel.postMessageWithReply({
-                    action: "launch_sshd"
-                });
-                if (res.status === "online") {
-                    log("🚀 SSHD ATIVO NA PORTA 2222!", "success");
-                }
-            } catch (e) {
-                log("❌ Erro ao disparar SSHD.", "error");
-            }
+        async function gainRoot() {
+            log("☢️ Tentando sobrescrever ucred (PAC/PPL Bypass)...");
+            const res = await window.webkit.messageHandlers.kernel.postMessageWithReply({action: "root"});
+            if (res.status === "ROOT_SUCCESS") log("🏆 SUCESSO! VOCÊ É ROOT.");
+            else log("❌ FALHA: O PPL bloqueou a escrita.");
         }
     </script>
 </body>
