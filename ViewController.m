@@ -2,18 +2,20 @@
 #import "KernelDriver.h"
 
 @interface ViewController ()
-@property (strong, nonatomic) KernelDriver *driver;
+// RETENÇÃO FORTE: Impede que a ponte morra após o carregamento
+@property (strong, nonatomic) KernelDriver *driver; 
 @end
 
 @implementation ViewController
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    _driver = [[KernelDriver alloc] init];
+    
+    self.driver = [[KernelDriver alloc] init];
     
     WKUserContentController *userCC = [[WKUserContentController alloc] init];
     
-    // CRITICAL: addScriptMessageHandlerWithReply habilita o método no JS
+    // USAR EXATAMENTE ESTE MÉTODO (iOS 14+)
     [userCC addScriptMessageHandlerWithReply:self.driver 
                                 contentWorld:[WKContentWorld pageWorld] 
                                         name:@"kernel"];
