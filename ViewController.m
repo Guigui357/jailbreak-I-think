@@ -1,42 +1,33 @@
 #import "ViewController.h"
 #import "KernelDriver.h"
 
-@interface ViewController ()
-// Removida a linha da webView daqui, pois já existe no ViewController.h
-@property (nonatomic, strong) KernelBridge *bridge; 
-@end
-
 @implementation ViewController
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    
-    // 1. Inicializa o motor do Kernel
-    self.bridge = [[KernelBridge alloc] init];
-    
-    // 2. Configura a WebView (usando a propriedade do .h)
+
+    // 1. Instância do Driver
+    self.kernelBridge = [[KernelBridge alloc] init];
+
+    // 2. Configuração da WebView
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
-    [config.userContentController addScriptMessageHandlerWithReply:self.bridge 
+    
+    // IMPORTANTE: O nome aqui DEVE ser "kernel" (minúsculo) para bater com o JS
+    [config.userContentController addScriptMessageHandlerWithReply:self.kernelBridge 
                                                       contentWorld:WKContentWorld.pageWorld 
                                                               name:@"kernel"];
-    
-    // Inicializa a instância
+
     self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
-    self.webView.backgroundColor = [UIColor blackColor];
-    [self.view addSubview:self.webView];
     
-    // 3. Carrega o HTML
+    // 3. Permite acesso a arquivos locais (index.html)
+    [self.webView.configuration.preferences setValue:@YES forKey:@"allowFileAccessFromFileURLs"];
+    
+    [self.view addSubview:self.webView];
+
+    // 4. Carrega o HTML
     NSURL *url = [[NSBundle mainBundle] URLForResource:@"index" withExtension:@"html"];
     if (url) {
-        [self.webView loadFileURL:url allowingReadAccessToURL:url];
-    } else {
-        NSLog(@"[!] Erro: index.html não encontrado no Bundle.");
+        [self.webView loadFileURL:url allowingReadAccessToURL:url.URLByDeletingLastPathComponent];
     }
 }
-
-- (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
-    self.webView.frame = self.view.bounds;
-}
-
 @end
