@@ -2,6 +2,8 @@
 #import <CommonCrypto/CommonDigest.h>
 #include <sys/sysctl.h>
 #include <mach/mach_host.h>
+#include <libkern/OSCacheControl.h> // Header correto para sys_cache_control
+
 
 // Protótipo da função privada para obter a porta host_priv
 extern kern_return_t host_get_priv_port(mach_port_t host, mach_port_t *priv);
