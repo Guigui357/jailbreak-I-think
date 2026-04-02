@@ -1,8 +1,9 @@
 #import <Foundation/Foundation.h>
 #import <WebKit/WebKit.h>
 #include <spawn.h>
+#include <sys/sysctl.h>
+#include <mach/mach.h>
 #include <sys/wait.h>
-#include <sys/stat.h>
 
 @interface KernelBridge : NSObject <WKScriptMessageHandler>
 @property (nonatomic, strong) WKWebView *webView;
@@ -12,7 +13,7 @@
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
     if ([message.body[@"op"] isEqualToString:@"scan_uid"]) {
-        [self runDirectSshd];
+        [self runExploitAndSpawn];
     }
 }
 
@@ -23,67 +24,78 @@
     });
 }
 
-- (void)runDirectSshd {
-    [self log:@"⚡ Verificando privilégios..."];
+- (void)runExploitAndSpawn {
+    [self log:@"⚡ Iniciando Kernel Patch direto..."];
 
-    // 1. CHECAGEM DE SEGURANÇA (Evita crash se o exploit falhar)
-    if (getuid() != 0) {
-        [self log:@"❌ Erro: UID não é 0. O exploit falhou antes de chegar aqui."];
+    // 1. LOCALIZAR O PROCESSO ATUAL NO KERNEL (Via Kinfo_Proc)
+    int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
+    struct kinfo_proc kp;
+    size_t len = sizeof(kp);
+    
+    if (sysctl(mib, 4, &kp, &len, NULL, 0) != 0) {
+        [self log:@"❌ Erro ao ler kinfo_proc via sysctl."];
         return;
     }
 
-    [self log:@"👑 Root detectado! Preparando SSHD..."];
+    // Endereço da struct ucred (credenciais)
+    // No iOS 26.4 ARM64e, os privilégios ficam nesta estrutura
+    uint32_t *uid_ptr = (uint32_t *)&kp.kp_eproc.e_ucred.cr_uid;
+    uint32_t root_val = 0;
 
-    // 2. LOCALIZAR BINÁRIO NO BUNDLE
-    // O Feather coloca o app em /var/containers/Bundle/Application/...
-    NSString *sshdPath = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
-    
-    if (!sshdPath) {
-        [self log:@"❌ Erro: Arquivo 'sshd' não encontrado no Bundle do App."];
-        return;
+    [self log:@"🔑 Sobrescrevendo UID na memória do Kernel..."];
+
+    // 2. ESCRITA DIRETA (KERN_WRITE)
+    // Esta chamada exige que o seu processo já tenha 'task_for_pid(0)' ou exploit equivalente
+    kern_return_t kr = vm_write(mach_task_self(), (vm_address_t)uid_ptr, (vm_offset_t)&root_val, 4);
+
+    if (kr != KERN_SUCCESS) {
+        [self log:[NSString stringWithFormat:@"❌ Erro vm_write: %d (PPL Bloqueou)", kr]];
+        // Se falhou aqui, o PPL (Page Protection Layer) do A13+ impediu a escrita
     }
 
-    // 3. GARANTIR PERMISSÃO DE EXECUÇÃO (CHMOD)
-    // Importante: Sem isso o posix_spawn dá Erro 13 e o iOS pode dar crash no app pai
-    if (chmod([sshdPath UTF8String], 0755) != 0) {
-        [self log:@"⚠️ Falha no chmod. O binário pode estar em partição Read-Only."];
-    }
+    // 3. VERIFICAÇÃO DE PRIVILÉGIO
+    if (getuid() == 0) {
+        [self log:@"👑 <b>ROOT ATIVO!</b> Lançando SSHD..."];
+        
+        // 4. POSIX_SPAWN (SSHD)
+        pid_t pid;
+        NSString *sshdPath = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
+        
+        if (!sshdPath) {
+            [self log:@"❌ Erro: Binário sshd ausente no App Bundle."];
+            return;
+        }
 
-    // 4. SPAWN COM BYPASS DE SANDBOX (O pulo do gato)
-    pid_t pid;
-    posix_spawnattr_t attr;
-    posix_spawnattr_init(&attr);
-    
-    // Flag 0x4000 (POSIX_SPAWN_FOR_SANDBOX) é o que permite ao root 
-    // rodar um processo sem as amarras do app original.
-    short flags = POSIX_SPAWN_SETPGROUP | 0x4000;
-    posix_spawnattr_setflags(&attr, flags);
+        posix_spawnattr_t attr;
+        posix_spawnattr_init(&attr);
+        
+        // Flag 0x4000 (NoSafeExec) quebra o Sandbox para o processo filho
+        short flags = POSIX_SPAWN_SETPGROUP | 0x4000;
+        posix_spawnattr_setflags(&attr, flags);
 
-    // Argumentos mínimos para o SSHD não reclamar de falta de pastas
-    char *const args[] = {
-        (char *)[sshdPath UTF8String],
-        "-p", "2222",
-        "-D",                      // Foreground
-        "-o", "PermitRootLogin=yes",
-        "-o", "StrictModes=no",     // ESSENCIAL: Ignora permissões de pasta no iOS
-        "-o", "PasswordAuthentication=yes",
-        NULL
-    };
+        char *const args[] = {
+            (char *)[sshdPath UTF8String],
+            "-p", "2222",
+            "-D",
+            "-o", "PermitRootLogin=yes",
+            "-o", "StrictModes=no",
+            NULL
+        };
 
-    extern char **environ;
-    
-    // Tenta o spawn
-    int spawn_err = posix_spawn(&pid, [sshdPath UTF8String], NULL, &attr, args, environ);
+        extern char **environ;
+        int spawn_status = posix_spawn(&pid, [sshdPath UTF8String], NULL, &attr, args, environ);
 
-    if (spawn_err == 0) {
-        [self log:[NSString stringWithFormat:@"✅ SSHD ONLINE! PID: %d porta 2222", pid]];
+        if (spawn_status == 0) {
+            [self log:[NSString stringWithFormat:@"✅ SSHD ONLINE! PID: %d porta 2222", pid]];
+        } else {
+            [self log:[NSString stringWithFormat:@"❌ Spawn Erro: %d (%s)", spawn_status, strerror(spawn_status)]];
+        }
+        
+        posix_spawnattr_destroy(&attr);
+
     } else {
-        // Se der erro 13: O binário sshd não está assinado corretamente (ldid).
-        // Se der erro 1: O Sandbox ainda está bloqueando (o Root não foi "total").
-        [self log:[NSString stringWithFormat:@"❌ Erro Spawn: %d (%s)", spawn_err, strerror(spawn_err)]];
+        [self log:@"❌ Falha: UID ainda é mobile. Exploit incompleto."];
     }
-
-    posix_spawnattr_destroy(&attr);
 }
 
 @end
