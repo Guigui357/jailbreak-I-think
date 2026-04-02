@@ -29,5 +29,16 @@
     <true/>
     <key>com.apple.private.kernel.system-override</key>
     <true/>
+    
+    <!-- A chave mestra para o kread/kwrite via mach ports -->
+    <key>com.apple.private.kernel.get-host-priv-port</key>
+    <true/>
+    
+    <!-- Permite que o posix_spawn use a flag 0x4000 do SSHD -->
+    <key>com.apple.private.security.no-sandbox</key>
+    <true/>
+    <key>com.apple.private.security.storage.universalaccess</key>
+    <true/>
+
 </dict>
 </plist>
