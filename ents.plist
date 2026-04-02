@@ -2,43 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
 <plist version="1.0">
 <dict>
-    <!-- Permissões de Depuração e Task -->
+    <key>com.apple.security.iokit-user-client-class</key>
+    <array>
+        <string>IOGPUUserClient</string>
+    </array>
     <key>get-task-allow</key>
     <true/>
-    <key>task_for_pid-allow</key>
-    <true/>
-    <key>com.apple.system-task-ports</key>
-    <true/>
-
-    <!-- Escape Total de Sandbox -->
-    <key>com.apple.private.security.no-sandbox</key>
-    <true/>
-    <key>com.apple.private.security.no-container</key>
-    <true/>
-    
-    <!-- PODER DE HARDWARE (Essencial para A13/PPL Bypass) -->
-    <key>com.apple.private.iogpu.allow-all-devices</key>
-    <true/>
-    <key>com.apple.private.apple-balance.user-access</key>
-    <true/>
-    <key>com.apple.private.security.storage.AppBundles</key>
-    <true/>
-    
-    <!-- Permissão para rodar binários do sistema (SSHD) -->
-    <key>platform-application</key>
-    <true/>
-    <key>com.apple.private.kernel.system-override</key>
-    <true/>
-    
-    <!-- A chave mestra para o kread/kwrite via mach ports -->
-    <key>com.apple.private.kernel.get-host-priv-port</key>
-    <true/>
-    
-    <!-- Permite que o posix_spawn use a flag 0x4000 do SSHD -->
-    <key>com.apple.private.security.no-sandbox</key>
-    <true/>
-    <key>com.apple.private.security.storage.universalaccess</key>
-    <true/>
-
 </dict>
 </plist>
