@@ -1,28 +1,25 @@
 #import "ViewController.h"
+#import "KernelBridge.h"
 
 @implementation ViewController {
-    KernelBridge *_strongBridge; // Referência REALMENTE forte
+    KernelBridge *_bridge;
 }
 
 - (void)viewDidLoad {
     [super viewDidLoad];
     
-    // 1. Criar o motor ANTES de tudo
-    _strongBridge = [[KernelBridge alloc] init];
+    _bridge = [[KernelBridge alloc] init];
     
-    // 2. Configurar a injeção
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
-    
-    // O nome DEVE ser "kernel" (minúsculo)
-    [config.userContentController addScriptMessageHandlerWithReply:_strongBridge 
+    // Injeção com suporte a Reply (iOS 14+)
+    [config.userContentController addScriptMessageHandlerWithReply:_bridge 
                                                       contentWorld:WKContentWorld.pageWorld 
                                                               name:@"kernel"];
 
-    // 3. Criar a WebView com essa config
     self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
     [self.view addSubview:self.webView];
     
-    // 4. Carregar o HTML
+    // Carrega o painel de controle do Exploit
     NSURL *url = [[NSBundle mainBundle] URLForResource:@"index" withExtension:@"html"];
     [self.webView loadFileURL:url allowingReadAccessToURL:url.URLByDeletingLastPathComponent];
 }
