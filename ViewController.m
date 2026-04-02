@@ -11,25 +11,23 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     
-    // Certifique-se que o driver é uma PROPRIEDADE (strong) da classe
+    // 1. Instância FORTE (Propriedade da classe)
     self.driver = [[KernelDriver alloc] init];
     
-    // 1. Criar a configuração PRIMEIRO
+    // 2. Configuração com o Handler ANTES da WebView existir
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     
-    // 2. Injetar o Handler DIRETAMENTE no controller da config
+    // USAR defaultWorld para arquivos locais (file://) no iOS 26.4
     [config.userContentController addScriptMessageHandlerWithReply:self.driver 
-                                                      contentWorld:[WKContentWorld pageWorld] 
+                                                      contentWorld:[WKContentWorld defaultWorld] 
                                                               name:@"kernel"];
     
-    // 3. Habilitar privilégios de arquivo (necessário para o exploit ler o bundle)
+    // 3. Habilitar acessos universais para o exploit
     [config setValue:@YES forKey:@"allowUniversalAccessFromFileURLs"];
 
-    // 4. Instanciar a WebView com a config JÁ POPULADA
     self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
     [self.view addSubview:self.webView];
     
     NSURL *url = [[NSBundle mainBundle] URLForResource:@"index" withExtension:@"html"];
     [self.webView loadFileURL:url allowingReadAccessToURL:url.URLByDeletingLastPathComponent];
 }
-@end
