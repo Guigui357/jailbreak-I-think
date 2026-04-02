@@ -77,35 +77,26 @@
         }
 
         async function executePTEBypass() {
-            mainBtn.disabled = true;
-            log("⏳ Solicitando acesso ao Kernel (Bridge: kernel)...", "warn");
-
+            log("⏳ Testando conexão com o Driver...", "warn");
             try {
-                // Tenta falar com o KernelDriver.m
-                const res = await window.webkit.messageHandlers.kernel.postMessageWithReply({
-                    action: "pte_patch",
-                    addr: "0xFFFFFFF007004000"
-                });
+                // Primeiro teste se a ponte existe
+                const test = await window.webkit.messageHandlers.kernel.postMessageWithReply({
+                action: "test_bridge"
+            });
+            log("✅ " + test.info, "success");
 
-                // Analisa a resposta do Objective-C
-                if (res.status === "SUCCESS") {
-                    log(`✅ SUCESSO! Kernel Slide: ${res.slide}`, "success");
-                    log("💡 Memória do Kernel agora é Read/Write.", "success");
-                } else if (res.status === "SANDBOX_LOCK") {
-                    log("❌ ACESSO NEGADO: " + res.info, "error");
-                    log("💡 Dica: Verifique se o app tem as Entitlements corretas.", "info");
-                } else {
-                    log("⚠️ Resposta desconhecida: " + JSON.stringify(res), "warn");
-                }
+            // Se a ponte estiver OK, tenta o Kernel
+            log("⏳ Solicitando leitura de memória...", "info");
+            const res = await window.webkit.messageHandlers.kernel.postMessageWithReply({
+                action: "pte_patch"
+            });
+            log("Resultado: " + res.status);
 
             } catch (err) {
-                // Se o app crashar ou a ponte falhar (SIGKILL)
-                log("💥 CRITICAL ERROR: O App foi encerrado pelo Kernel (AMFI/Sandbox).", "error");
-                log("Verifique os logs de Panic no iPhone (Ajustes > Privacidade).", "info");
-            } finally {
-                mainBtn.disabled = false;
+                log("❌ A ponte falhou. Verifique se o nome 'kernel' está correto no ViewController.m", "error");
             }
         }
+
     </script>
 </body>
 </html>
