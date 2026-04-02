@@ -8,7 +8,7 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     
-    _bridge = [[KernelBridge alloc] init];
+    _bridge = [[KernelDriver alloc] init];
     
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     // Injeção com suporte a Reply (iOS 14+)
