@@ -18,9 +18,18 @@
 
         async function startScan() {
             log("⏳ Varrendo memória...");
-            const res = await window.webkit.messageHandlers.kernel.postMessageWithReply({action: "scan"});
-            log(`✅ Kernel Slide: ${res.value}`);
-        }
+            try {
+                const res = await window.webkit.messageHandlers.kernel.postMessageWithReply({action: "scan"});
+                if (res.value === "FALLBACK_ERROR") {
+                log("❌ Erro: O iOS bloqueou a leitura da memória.");
+            } else {
+                log(`✅ Kernel Slide: ${res.value}`);
+            }
+            } catch (e) {
+                log("💥 Erro Fatal: A ponte com o Kernel caiu (Sandbox/Panic).");
+            }
+    }
+
 
         async function gainRoot() {
             log("☢️ Tentando sobrescrever ucred (PAC/PPL Bypass)...");
