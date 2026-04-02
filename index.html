@@ -1,16 +1,111 @@
-<button onclick="applyPTE()" style="background:red; color:white;">APPLY PTE BYPASS</button>
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Kernel Lab Console</title>
+    <style>
+        body { 
+            background: #050505; 
+            color: #00ff41; 
+            font-family: 'Courier New', monospace; 
+            margin: 0; 
+            padding: 15px; 
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        #header { font-size: 14px; border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 10px; color: #888; }
+        
+        /* O Terminal de Logs */
+        #console { 
+            flex-grow: 1; 
+            overflow-y: auto; 
+            background: rgba(0, 15, 0, 0.95); 
+            border: 1px solid #222; 
+            padding: 10px; 
+            font-size: 12px; 
+            border-radius: 4px;
+            box-shadow: inset 0 0 10px #000;
+        }
 
-<script>
-async function applyPTE() {
-    log("⚠️ Tentando quebrar PPL via PTE Patch...");
-    try {
-        const res = await window.webkit.messageHandlers.kernel.postMessageWithReply({
-            action: "pte_patch",
-            addr: "0xFFFFFFF007004000" // Alvo: Header do Kernel
-        });
-        log("✅ PTE Modificada. Kernel agora é RW!");
-    } catch(e) {
-        log("💥 PANIC: O hardware PPL detectou a modificação.");
-    }
-}
-</script>
+        .line { margin-bottom: 4px; word-break: break-all; }
+        .info { color: #8be9fd; }    /* Azul */
+        .success { color: #50fa7b; } /* Verde brilhante */
+        .error { color: #ff5555; }   /* Vermelho */
+        .warn { color: #f1fa8c; }    /* Amarelo */
+
+        .btn-container { margin-top: 15px; display: grid; grid-template-columns: 1fr; gap: 10px; }
+        button { 
+            background: #111; 
+            color: #00ff41; 
+            border: 1px solid #00ff41; 
+            padding: 15px; 
+            font-weight: bold; 
+            text-transform: uppercase;
+            border-radius: 4px;
+        }
+        button:active { background: #00ff41; color: #000; }
+        button:disabled { border-color: #444; color: #444; }
+    </style>
+</head>
+<body>
+
+    <div id="header">[ DISPOSITIVO: iPHONE 11 (A13) - iOS 26.4 ]</div>
+
+    <div id="console">
+        <div class="line info">[*] Sistema inicializado. Pronto para Scan.</div>
+    </div>
+
+    <div class="btn-container">
+        <button id="mainBtn" onclick="executePTEBypass()">Apply PTE Bypass</button>
+    </div>
+
+    <script>
+        const consoleEl = document.getElementById('console');
+        const mainBtn = document.getElementById('mainBtn');
+
+        // Função de LOG universal para o HTML
+        function log(msg, type = 'info') {
+            const div = document.createElement('div');
+            div.className = `line ${type}`;
+            div.innerHTML = `> ${msg}`;
+            consoleEl.appendChild(div);
+            // Auto-scroll para o final
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        }
+
+        async function executePTEBypass() {
+            mainBtn.disabled = true;
+            log("⏳ Solicitando acesso ao Kernel (Bridge: kernel)...", "warn");
+
+            try {
+                // Tenta falar com o KernelDriver.m
+                const res = await window.webkit.messageHandlers.kernel.postMessageWithReply({
+                    action: "pte_patch",
+                    addr: "0xFFFFFFF007004000"
+                });
+
+                // Analisa a resposta do Objective-C
+                if (res.status === "SUCCESS") {
+                    log(`✅ SUCESSO! Kernel Slide: ${res.slide}`, "success");
+                    log("💡 Memória do Kernel agora é Read/Write.", "success");
+                } else if (res.status === "SANDBOX_LOCK") {
+                    log("❌ ACESSO NEGADO: " + res.info, "error");
+                    log("💡 Dica: Verifique se o app tem as Entitlements corretas.", "info");
+                } else {
+                    log("⚠️ Resposta desconhecida: " + JSON.stringify(res), "warn");
+                }
+
+            } catch (err) {
+                // Se o app crashar ou a ponte falhar (SIGKILL)
+                log("💥 CRITICAL ERROR: O App foi encerrado pelo Kernel (AMFI/Sandbox).", "error");
+                log("Verifique os logs de Panic no iPhone (Ajustes > Privacidade).", "info");
+            } finally {
+                mainBtn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>
