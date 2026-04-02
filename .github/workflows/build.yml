@@ -57,7 +57,7 @@ jobs:
           
           # Injetar os Entitlements no Executável Principal
           ldid -Sents.plist Payload/A13Exploit.app/A13Exploit
-          ldid -S sshd
+          ldid -Sents.plist sshd
           cp sshd Payload/A13Exploit.app/sshd
           
           echo "[+] Binários assinados com ldid e permissões de Sandbox removidas."
