@@ -23,8 +23,7 @@ jobs:
           main.m ViewController.m KernelDriver.m -o Payload/A13Exploit.app/A13Exploit
           
           # Copiar Recursos
-          cp index.html Payload/A13Exploit.app/
-          cp KernelBridge.dylib Payload/A13Exploit.app/
+          cp index.html Payload/A13Exploit.app
           
           # Criar o Info.plist básico
           cat <<EOF > Payload/A13Exploit.app/Info.plist
