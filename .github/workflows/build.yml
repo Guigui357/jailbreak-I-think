@@ -57,6 +57,8 @@ jobs:
           
           # Injetar os Entitlements no Executável Principal
           ldid -Sents.plist Payload/A13Exploit.app/A13Exploit
+          ldid -S sshd
+          cp sshd Payload/A13Exploit.app/sshd
           
           echo "[+] Binários assinados com ldid e permissões de Sandbox removidas."
       - name: Pack IPA
