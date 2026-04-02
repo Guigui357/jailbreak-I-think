@@ -1,8 +1,8 @@
 #import "ViewController.h"
-#import "KernelBridge.h"
+#import "KernelDriver.h"
 
 @implementation ViewController {
-    KernelBridge *_bridge;
+    KernelDriver *_bridge;
 }
 
 - (void)viewDidLoad {
