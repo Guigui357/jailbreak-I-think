@@ -3,36 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Catalyst-26 | A13 Kernel Lab</title>
+    <title>Catalyst-26 | A13 Lab</title>
     <style>
-        body { background: #050505; color: #00ff41; font-family: 'Courier New', monospace; margin: 0; padding: 15px; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-        #header { font-size: 11px; border-bottom: 1px solid #1a1a1a; padding-bottom: 8px; margin-bottom: 10px; color: #444; display: flex; justify-content: space-between; text-transform: uppercase; }
-        #console { flex-grow: 1; overflow-y: auto; background: rgba(0, 5, 0, 0.9); border: 1px solid #111; padding: 12px; font-size: 12px; border-radius: 4px; box-shadow: inset 0 0 20px #000; }
-        .line { margin-bottom: 5px; word-break: break-all; border-left: 2px solid transparent; padding-left: 8px; }
-        .info { color: #8be9fd; border-left-color: #8be9fd; }
-        .success { color: #50fa7b; border-left-color: #50fa7b; font-weight: bold; }
-        .error { color: #ff5555; border-left-color: #ff5555; background: rgba(255,0,0,0.1); }
-        .warn { color: #f1fa8c; border-left-color: #f1fa8c; }
-        .controls { margin-top: 15px; }
-        button { width: 100%; background: #000; color: #00ff41; border: 1px solid #00ff41; padding: 18px; font-weight: bold; border-radius: 4px; font-family: inherit; font-size: 14px; cursor: pointer; transition: 0.2s; }
-        button:active { background: #00ff41; color: #000; }
-        button:disabled { border-color: #333; color: #333; cursor: wait; }
+        body { background: #050505; color: #00ff41; font-family: 'Courier New', monospace; margin: 0; padding: 15px; display: flex; flex-direction: column; height: 100vh; }
+        #console { flex-grow: 1; overflow-y: auto; background: #000; border: 1px solid #111; padding: 10px; font-size: 11px; border-radius: 4px; }
+        .line { margin-bottom: 4px; word-break: break-all; }
+        .success { color: #50fa7b; }
+        .error { color: #ff5555; }
+        .warn { color: #f1fa8c; }
+        button { width: 100%; background: #000; color: #00ff41; border: 1px solid #00ff41; padding: 18px; font-weight: bold; border-radius: 4px; font-family: inherit; margin-top: 10px; }
+        button:disabled { border-color: #333; color: #333; }
     </style>
 </head>
 <body>
-
-    <div id="header">
-        <span>[ EXPLOIT: CATALYST-26 ]</span>
-        <span>BUILD: 23E5207Q (A13)</span>
-    </div>
 
     <div id="console">
         <div class="line info">[*] Terminal Catalyst-26 inicializado.</div>
     </div>
 
-    <div class="controls">
-        <button id="mainBtn" onclick="runExploit()">EXECUTE PTE BYPASS & SPAWN SSHD</button>
-    </div>
+    <button id="mainBtn" onclick="runExploit()">EXECUTE EXPLOIT & SPAWN SSHD</button>
 
     <script>
         const consoleEl = document.getElementById('console');
@@ -46,70 +35,54 @@
             consoleEl.scrollTop = consoleEl.scrollHeight;
         }
 
-        /**
-         * Scanner de Ponte Nativa (A13/iOS 26.4)
-         * Busca o handler 'kernel' em todos os mundos de conteúdo possíveis.
-         */
-        async function findKernelBridge() {
-            log("Escaneando namespaces de IPC...", "warn");
+        async function findBridge() {
+            log("Varrendo protótipos de memória (Deep Scan)...", "warn");
             
-            for (let i = 0; i < 20; i++) { // 2 segundos de varredura
+            for (let i = 0; i < 15; i++) {
+                // Tenta capturar o handler em qualquer namespace possível
                 const bridge = window.webkit?.messageHandlers?.kernel;
                 
-                if (bridge && typeof bridge.postMessageWithReply === 'function') {
-                    return bridge;
+                if (bridge) {
+                    // Verifica se a função existe no objeto ou no __proto__
+                    const hasReply = (typeof bridge.postMessageWithReply === 'function') || 
+                                   (bridge.__proto__ && typeof bridge.__proto__.postMessageWithReply === 'function');
+                    
+                    if (hasReply) return bridge;
                 }
-                await new Promise(r => setTimeout(r, 100));
+                await new Promise(r => setTimeout(r, 150));
             }
             return null;
         }
 
         async function runExploit() {
             btn.disabled = true;
-            
-            const bridge = await findKernelBridge();
+            const bridge = await findBridge();
 
             if (!bridge) {
                 log("FALHA CRÍTICA: postMessageWithReply não injetado.", "error");
-                log("Dica: Verifique se compilou com -arch arm64e no Xcode.", "info");
+                log("Dica: Verifique se usou -arch arm64e no build.", "warn");
                 btn.disabled = false;
                 return;
             }
 
             try {
-                log("Conexão estabelecida via pageWorld.", "success");
-                log("Iniciando handshake nativo...", "info");
-                
-                const test = await bridge.postMessageWithReply({ action: "test_bridge" });
-                log(`RESPOSTA: ${test.info}`, "success");
-
-                log("Disparando Catalyst-26 (PPL/PTE Bypass)...", "warn");
+                log("Ponte validada via Prototype. Iniciando...", "success");
                 const res = await bridge.postMessageWithReply({ action: "pte_patch" });
 
                 if (res.status === "SUCCESS") {
-                    log(`KASLR BYPASS: Slide em ${res.slide}`, "success");
-                    log("MEMÓRIA: Tabelas de página RW (PPL Bypass OK).", "success");
-                    log("PRIVILEGE: UID 0 (Root) escalado.", "success");
-                    log(`SPAWN: SSHD iniciado (PID: ${res.pid || 'N/A'}).`, "info");
-                    log("CONEXÃO: ssh root@localhost -p 2222", "success");
+                    log(`KASLR: Slide 0x${res.slide.toString(16)}`, "success");
+                    log("PPL BYPASS: Escrita em PTE liberada.", "success");
+                    log("ROOT: UID 0 escalado.", "success");
+                    log("SPAWN: SSHD iniciado na porta 2222.", "success");
                 } else {
-                    log(`FALHA NO EXPLOIT: ${res.info}`, "error");
+                    log("FALHA: " + (res.info || "Exploit negado"), "error");
                 }
-
             } catch (err) {
-                log(`PANIC: ${err.message || err}`, "error");
-                log("Verifique se o App possui Entitlements do IOGPU.", "warn");
+                log("EXCEÇÃO: " + err, "error");
             } finally {
                 btn.disabled = false;
             }
         }
-
-        // Auto-verificação no carregamento
-        window.onload = async () => {
-            const bridge = await findKernelBridge();
-            if (bridge) log("Catalyst-26 Bridge: ONLINE", "success");
-            else log("Aguardando injeção do KernelDriver...", "warn");
-        };
     </script>
 </body>
 </html>
