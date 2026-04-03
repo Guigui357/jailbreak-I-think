@@ -24,7 +24,7 @@ jobs:
           clang -arch arm64e -fobjc-arc -m64 \
           -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
           -miphoneos-version-min=15.0 \
-          -framework UIKit -framework WebKit -framework Foundation -framework IOKit \
+          -framework UIKit -framework WebKit -framework Foundation -framework IOKit -framework CoreGraphics \
           main.m ViewController.m KernelDriver.m \
           -o Payload/A13Exploit.app/A13Exploit
           
