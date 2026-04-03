@@ -119,7 +119,12 @@ extern char **environ;
     
     return NO;
 }
-
+- (void)logToWeb:(NSString *)text {
+    NSLog(@"[KERNEL] %@", text);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"KernelLogNotification" object:text];
+    });
+}
 
 #pragma mark - Implementação Final
 
