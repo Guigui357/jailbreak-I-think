@@ -3,7 +3,6 @@
 
 @interface ViewController ()
 @property (strong, nonatomic) KernelDriver *driver;
-@property (strong, nonatomic) WKWebView *webView;
 @end
 
 @implementation ViewController
