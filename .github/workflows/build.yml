@@ -1,6 +1,8 @@
-name: Build A13 Exploit IPA
+name: Build Catalyst-26 A13 Exploit
 
-on: [push, workflow_dispatch]
+on: 
+  push:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -16,48 +18,67 @@ jobs:
       - name: Create App Structure
         run: |
           mkdir -p Payload/A13Exploit.app
-          # Compilar o código do App Shell 
+          
+          # 1. Compilação do App Shell (Focado em A13/arm64e)
+          # Adicionamos flags de otimização e min-version para evitar bloqueios do Kernel
           clang -arch arm64e -fobjc-arc \
           -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
+          -miphoneos-version-min=15.0 \
           -framework UIKit -framework WebKit -framework Foundation -framework IOKit \
-          main.m ViewController.m KernelDriver.m -o Payload/A13Exploit.app/A13Exploit
+          main.m ViewController.m KernelDriver.m \
+          -o Payload/A13Exploit.app/A13Exploit
           
-          # Copiar Recursos
-          cp index.html Payload/A13Exploit.app
+          # 2. Copiar Recursos (HTML e o binário SSHD)
+          # Certifique-se de que 'index.html' e 'sshd' estão na raiz do seu repo
+          cp index.html Payload/A13Exploit.app/index.html
+          cp sshd Payload/A13Exploit.app/sshd
           
-          # Criar o Info.plist básico
+          # 3. Gerar Info.plist necessária para o iOS reconhecer o App
           cat <<EOF > Payload/A13Exploit.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
           <plist version="1.0">
           <dict>
               <key>CFBundleExecutable</key> <string>A13Exploit</string>
-              <key>CFBundleIdentifier</key> <string>com.kernel.a13exploit</string>
-              <key>CFBundleName</key> <string>A13 Exploit</string>
+              <key>CFBundleIdentifier</key> <string>com.kernel.catalyst26</string>
+              <key>CFBundleName</key> <string>Catalyst-26</string>
               <key>CFBundlePackageType</key> <string>APPL</string>
               <key>CFBundleShortVersionString</key> <string>1.0</string>
               <key>LSRequiresIPhoneOS</key> <true/>
               <key>MinimumOSVersion</key> <string>15.0</string>
+              <key>CFBundleSupportedPlatforms</key> <array><string>iPhoneOS</string></array>
           </dict>
           </plist>
           EOF
-      - name: Assinar com ldid (Privilégios de Kernel)
+
+      - name: Assinar com ldid (Bypass Sandbox & Root Privs)
         run: |
-          # Instalar ldid no macOS do GitHub
           brew install ldid
-          
-          # Injetar os Entitlements no Executável Principal
-          ldid -Sents.plist Payload/A13Exploit.app/A13Exploit
-          ldid -Sents.plist sshd
-          chmod +x sshd
           cp sshd Payload/A13Exploit.app/sshd
+          # [!] CRÍTICO: Assinar os binários com as entitlements que você postou
+          # O arquivo deve se chamar exatamente 'ents.plist' no seu repositório
+          if [ -f "ents.plist" ]; then
+            ldid -Sents.plist Payload/A13Exploit.app/A13Exploit
+            ldid -Sents.plist Payload/A13Exploit.app/sshd
+            echo "[+] Assinatura ldid aplicada com sucesso."
+          else
+            echo "[!] ERRO: Arquivo ents.plist não encontrado. Usando assinatura simples."
+            ldid -S Payload/A13Exploit.app/A13Exploit
+            ldid -S Payload/A13Exploit.app/sshd
+          fi
           
-          echo "[+] Binários assinados com ldid e permissões de Sandbox removidas."
+          # Garantir bits de execução
+          chmod 755 Payload/A13Exploit.app/A13Exploit
+          chmod 755 Payload/A13Exploit.app/sshd
+
       - name: Pack IPA
         run: |
+          # O iOS exige que a pasta Payload seja zipada como .ipa
           zip -r A13Exploit.ipa Payload
-          echo "[+] IPA Gerado com Sucesso."
+          echo "[+] IPA Catalyst-26 Gerado."
+
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: A13-Kernel-Exploit-IPA
+          name: Catalyst-26-A13-IPA
           path: A13Exploit.ipa
