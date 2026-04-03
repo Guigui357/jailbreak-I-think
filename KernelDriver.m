@@ -9,7 +9,8 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
 extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_size_t);
 
 // --- DEFINIÇÕES CRÍTICAS (Resolve o erro KERN_BASE_STATIC) ---
-#define KERN_BASE_STATIC 0xFFFFFFF007004000ULL
+// Base específica para o iPhone 11 A13 em builds 26.x
+#define KERN_BASE_STATIC 0xFFFFFFF008004000ULL
 #define OFFSET_ALLPROC     0x91F0000ULL
 #define OFFSET_TTBR1       0x8E10000ULL
 
