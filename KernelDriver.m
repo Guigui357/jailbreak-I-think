@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
 - (uint64_t)getKernelSlide {
     if (_kernel_slide != 0) return _kernel_slide;
 
-    uint64_t bases[] = {0xFFFFFFF007004000, 0xFFFFFFF0007004000};
+    uint64_t bases[] = {0xFFFFFFF007004000ULL, 0xFFFFFFF0007004000ULL};
     for (int b = 0; b < 2; b++) {
         for (uint64_t i = 0; i < 0x100000; i++) {
             uint64_t addr = bases[b] + (i * 0x4000);
