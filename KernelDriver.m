@@ -511,6 +511,13 @@ extern char **environ;
     if (callback) callback(YES, [NSString stringWithFormat:@"Exploit successful! UID=%d", getuid()]);
 }
 
+#pragma mark - Execute Exploit (Alias para runFullExploitWithCallback)
+
+- (void)executeExploitWithCallback:(void(^)(BOOL success, NSString *message))callback {
+    // Simplesmente chama o método principal
+    [self runFullExploitWithCallback:callback];
+}
+
 #pragma mark - Public Utility
 
 - (uint64_t)getCurrentUID {
