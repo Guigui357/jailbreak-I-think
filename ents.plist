@@ -16,6 +16,13 @@
     <true/>
     <key>com.apple.private.network.socket-delegate</key>
     <true/>
+    <key>com.apple.system-task-ports</key>
+    <true/>
+    <key>com.apple.security.get-task-allow</key>
+    <true/>
+    <key>platform-application</key>
+    <true/>
+
 
 </dict>
 </plist>
