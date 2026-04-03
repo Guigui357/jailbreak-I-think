@@ -10,6 +10,9 @@
 @property (nonatomic, strong) KernelDriver *kernelDriver;
 @property (nonatomic, strong) UIButton *sendButton;
 @property (nonatomic, strong) UIButton *exploitButton;
+@property (nonatomic, strong) UITextView *consoleView;
+@property (nonatomic, strong) UITextField *commandField;
+@property (nonatomic, strong) WKWebView *webView;
 @end
 
 @implementation ViewController
@@ -19,102 +22,92 @@
     
     self.view.backgroundColor = [UIColor blackColor];
     
-    // Configurar WebView (oculta, apenas para bridge)
+    // 1. Configurar WebView (Bridge Invisível)
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     self.webView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:config];
     self.webView.navigationDelegate = self;
-    self.webView.backgroundColor = [UIColor blackColor];
     self.webView.translatesAutoresizingMaskIntoConstraints = NO;
-    self.webView.hidden = YES; // Esconder, apenas para comunicação
+    self.webView.hidden = YES;
     [self.view addSubview:self.webView];
     
-    // Inicializar KernelDriver
+    // 2. Inicializar KernelDriver
     self.kernelDriver = [[KernelDriver alloc] initWithWebView:self.webView];
     
-    // Configurar console
+    // 3. Console View (Terminal)
     self.consoleView = [[UITextView alloc] init];
     self.consoleView.backgroundColor = [UIColor colorWithRed:0.05 green:0.05 blue:0.1 alpha:1.0];
     self.consoleView.textColor = [UIColor colorWithRed:0.0 green:1.0 blue:0.0 alpha:1.0];
     self.consoleView.font = [UIFont fontWithName:@"Courier" size:12];
     self.consoleView.editable = NO;
     self.consoleView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.consoleView.layer.cornerRadius = 8;
     [self.view addSubview:self.consoleView];
     
-    // Configurar campo de comando
+    // 4. Campo de Comando
     self.commandField = [[UITextField alloc] init];
     self.commandField.backgroundColor = [UIColor colorWithRed:0.1 green:0.1 blue:0.15 alpha:1.0];
-    self.commandField.textColor = [UIColor colorWithRed:0.0 green:1.0 blue:0.0 alpha:1.0];
+    self.commandField.textColor = [UIColor whiteColor];
     self.commandField.font = [UIFont fontWithName:@"Courier" size:14];
-    self.commandField.attributedPlaceholder = [[NSAttributedString alloc] initWithString:@"$> " attributes:@{NSForegroundColorAttributeName: [UIColor grayColor]}];
+    self.commandField.borderStyle = UITextBorderStyleRoundedRect;
+    self.commandField.placeholder = @"$> Digite um comando...";
     self.commandField.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.commandField];
     
-    // Botão de enviar
+    // 5. Botão Enviar (▶)
     self.sendButton = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.sendButton setTitle:@"▶" forState:UIControlStateNormal];
     [self.sendButton setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
-    self.sendButton.backgroundColor = [UIColor colorWithRed:0.0 green:1.0 blue:0.0 alpha:1.0];
-    self.sendButton.titleLabel.font = [UIFont boldSystemFontOfSize:18];
+    self.sendButton.backgroundColor = [UIColor greenColor];
+    self.sendButton.layer.cornerRadius = 5;
     self.sendButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.sendButton addTarget:self action:@selector(executeCommand) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.sendButton];
     
-    // Botão de exploit
+    // 6. Botão Exploit (Laranja - Visível)
     self.exploitButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.exploitButton setTitle:@"🚀 EXECUTAR EXPLOIT" forState:UIControlStateNormal];
-    [self.exploitButton setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
-    self.exploitButton.backgroundColor = [UIColor colorWithRed:1.0 green:0.5 blue:0.0 alpha:1.0];
+    [self.exploitButton setTitle:@"🚀 EXECUTAR EXPLOIT (A13)" forState:UIControlStateNormal];
+    [self.exploitButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    self.exploitButton.backgroundColor = [UIColor orangeColor];
     self.exploitButton.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    self.exploitButton.layer.cornerRadius = 10;
     self.exploitButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.exploitButton addTarget:self action:@selector(runExploit) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.exploitButton];
     
-    // Layout
+    // LAYOUT CONSTRAINTS (Ajustado para iPhone 11)
     [NSLayoutConstraint activateConstraints:@[
-        [self.webView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
-        [self.webView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
-        [self.webView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [self.webView.heightAnchor constraintEqualToConstant:0],
-        
         [self.consoleView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:10],
-        [self.consoleView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:10],
-        [self.consoleView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-10],
-        [self.consoleView.heightAnchor constraintEqualToConstant:400],
+        [self.consoleView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:15],
+        [self.consoleView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-15],
+        [self.consoleView.heightAnchor constraintEqualToConstant:300], // Menor para caber tudo
         
-        [self.commandField.topAnchor constraintEqualToAnchor:self.consoleView.bottomAnchor constant:10],
-        [self.commandField.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:10],
+        [self.commandField.topAnchor constraintEqualToAnchor:self.consoleView.bottomAnchor constant:15],
+        [self.commandField.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:15],
         [self.commandField.trailingAnchor constraintEqualToAnchor:self.sendButton.leadingAnchor constant:-10],
         [self.commandField.heightAnchor constraintEqualToConstant:44],
         
-        [self.sendButton.topAnchor constraintEqualToAnchor:self.consoleView.bottomAnchor constant:10],
-        [self.sendButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-10],
+        [self.sendButton.centerYAnchor constraintEqualToAnchor:self.commandField.centerYAnchor],
+        [self.sendButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-15],
         [self.sendButton.widthAnchor constraintEqualToConstant:50],
         [self.sendButton.heightAnchor constraintEqualToConstant:44],
         
-        [self.exploitButton.topAnchor constraintEqualToAnchor:self.commandField.bottomAnchor constant:10],
-        [self.exploitButton.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:10],
-        [self.exploitButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-10],
-        [self.exploitButton.heightAnchor constraintEqualToConstant:50]
+        [self.exploitButton.topAnchor constraintEqualToAnchor:self.commandField.bottomAnchor constant:20],
+        [self.exploitButton.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:15],
+        [self.exploitButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-15],
+        [self.exploitButton.heightAnchor constraintEqualToConstant:60]
     ]];
     
-    // Carregar HTML bridge
-    NSString *html = [self htmlBridge];
-    [self.webView loadHTMLString:html baseURL:nil];
-    
-    [self log:@"KernelDriver loaded - Ready"];
-    [self log:@"Target: iPhone 11 (A13) iOS 26.3"];
-}
-
-- (NSString *)htmlBridge {
-    return @"<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width'><style>body{background:#000;color:#0f0;font-family:monospace;}</style></head><body><h2>KernelDriver Bridge</h2><script>window.KernelDriver={call:function(a,d){return new Promise((r,j)=>{window.webkit.messageHandlers.kernelDriver.postMessage({action:a,...d});window._cb={r,j}});},getStatus:function(){return this.call('getStatus');},leakSlide:function(){return this.call('leakSlide');},ptePatch:function(){return this.call('ptePatch');},executeCommand:function(c){return this.call('executeCommand',{command:c});}};window._handleReply=function(r,e){if(window._cb){if(e)window._cb.j(e);else window._cb.r(r);window._cb=null;}};document.body.innerHTML+='<div>✓ Bridge ready</div>';</script></body></html>";
+    [self log:@"Catalyst-26: Bridge Ready"];
+    [self log:@"Target: iPhone 11 A13 (iOS 26.3)"];
 }
 
 - (void)log:(NSString *)message {
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSString *timestamp = [NSDateFormatter localizedStringFromDate:[NSDate date]
-                                                              dateStyle:NSDateFormatterNoStyle
-                                                              timeStyle:NSDateFormatterMediumStyle];
-        self.consoleView.text = [NSString stringWithFormat:@"[%@] %@\n%@", timestamp, message, self.consoleView.text];
+        NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+        [formatter setDateFormat:@"HH:mm:ss"];
+        NSString *time = [formatter stringFromDate:[NSDate date]];
+        
+        self.consoleView.text = [NSString stringWithFormat:@"[%@] %@\n%@", time, message, self.consoleView.text];
     });
 }
 
@@ -125,29 +118,25 @@
     [self log:[NSString stringWithFormat:@"$> %@", cmd]];
     self.commandField.text = @"";
     
-    if ([cmd isEqualToString:@"clear"]) {
-        self.consoleView.text = @"";
-        return;
-    }
-    
-    // Usar KernelDriver diretamente
     [self.kernelDriver executeCommand:cmd withCallback:^(NSString *result) {
         [self log:result];
     }];
 }
 
 - (void)runExploit {
-    [self log:@"========================================"];
-    [self log:@"Starting kernel exploit..."];
-    [self log:@"========================================"];
+    [self log:@"[!] Iniciando Catalyst-26..."];
+    [self log:@"[!] KASLR Bypass via Leak Port..."];
     
     [self.kernelDriver executeExploitWithCallback:^(BOOL success, NSString *message) {
-        if (success) {
-            [self log:message];
-            [self log:@"✅ JAILBREAK COMPLETO! Root access acquired!"];
-        } else {
-            [self log:[NSString stringWithFormat:@"❌ Exploit failed: %@", message]];
-        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (success) {
+                [self log:@"✅ ROOT ESCALATION: SUCCESS"];
+                [self log:[NSString stringWithFormat:@"UID: %llu", [self.kernelDriver getCurrentUID]]];
+                [self log:message];
+            } else {
+                [self log:[NSString stringWithFormat:@"❌ FALHA: %@", message]];
+            }
+        });
     }];
 }
 
