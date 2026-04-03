@@ -34,6 +34,10 @@
     <true/>
     <key>com.apple.security.hypervisor</key>
     <true/>
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    <key>com.apple.private.memorystatus</key>
+    <true/>
 
 </dict>
 </plist>
