@@ -21,7 +21,7 @@ jobs:
           
           # 1. Compilação do App Shell (Focado em A13/arm64e)
           # Adicionamos flags de otimização e min-version para evitar bloqueios do Kernel
-          clang -arch arm64e -fobjc-arc \
+          clang -arch arm64e -fobjc-arc -m64 \
           -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
           -miphoneos-version-min=15.0 \
           -framework UIKit -framework WebKit -framework Foundation -framework IOKit \
