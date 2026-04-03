@@ -1,38 +1,84 @@
 <!DOCTYPE html>
-<html>
+<html lang="pt-BR">
 <head>
-    <style>body { background: #000; color: #0f4; font-family: monospace; padding: 20px; }</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Catalyst-26 | A13 Kernel Lab</title>
+    <style>
+        body { background: #050505; color: #00ff41; font-family: 'Courier New', monospace; margin: 0; padding: 15px; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        #header { font-size: 11px; border-bottom: 1px solid #1a1a1a; padding-bottom: 8px; margin-bottom: 10px; color: #444; display: flex; justify-content: space-between; text-transform: uppercase; }
+        #console { flex-grow: 1; overflow-y: auto; background: rgba(0, 5, 0, 0.9); border: 1px solid #111; padding: 12px; font-size: 12px; border-radius: 4px; box-shadow: inset 0 0 20px #000; }
+        .line { margin-bottom: 5px; word-break: break-all; border-left: 2px solid transparent; padding-left: 8px; }
+        .info { color: #8be9fd; border-left-color: #8be9fd; }
+        .success { color: #50fa7b; border-left-color: #50fa7b; font-weight: bold; }
+        .error { color: #ff5555; border-left-color: #ff5555; background: rgba(255,0,0,0.1); }
+        .warn { color: #f1fa8c; border-left-color: #f1fa8c; }
+        .controls { margin-top: 15px; }
+        button { width: 100%; background: #000; color: #00ff41; border: 1px solid #00ff41; padding: 18px; font-weight: bold; border-radius: 4px; font-family: inherit; font-size: 14px; cursor: pointer; transition: 0.2s; }
+        button:active { background: #00ff41; color: #000; }
+        button:disabled { border-color: #333; color: #333; cursor: wait; }
+    </style>
 </head>
 <body>
-    <div id="log">> Aguardando Catalyst-26...</div>
-    <button onclick="run()" style="width:100%; padding:20px; background:#000; color:#0f4; border:1px solid #0f4; margin-top:20px;">RUN EXPLOIT</button>
+
+    <div id="header">
+        <span>[ EXPLOIT: CATALYST-26 ]</span>
+        <span>BUILD: 23E5207Q (A13)</span>
+    </div>
+
+    <div id="console">
+        <div class="line info">[*] Terminal Catalyst-26 Pronto.</div>
+    </div>
+
+    <div class="controls">
+        <button id="mainBtn" onclick="runExploit()">EXECUTE PTE BYPASS & ESCALATE ROOT</button>
+    </div>
 
     <script>
-        const out = document.getElementById('log');
-        const print = (m) => out.innerHTML += "<br>> " + m;
+        const consoleEl = document.getElementById('console');
+        const btn = document.getElementById('mainBtn');
 
-        async function run() {
-            // Busca a ponte em todos os escopos injetados
-            const bridge = window.kernel || window.webkit?.messageHandlers?.kernel;
-            
-            if (!bridge || typeof bridge.postMessageWithReply !== 'function') {
-                print("ERRO: postMessageWithReply não injetado. Verifique a arquitetura arm64e.");
-                return;
+        function log(msg, type = 'info') {
+            const div = document.createElement('div');
+            div.className = `line ${type}`;
+            div.innerHTML = `> ${msg}`;
+            consoleEl.appendChild(div);
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        }
+
+        // 1. RECEPTOR DE RESPOSTA (O KernelDriver.m chama isso via evaluateJavaScript)
+        window.handleNativeResponse = function(res) {
+            if (res.status === "SUCCESS") {
+                log(`KASLR BYPASS: Slide em ${res.slide}`, "success");
+                log(`PPL BYPASS: Escrita em PTE confirmada.`, "success");
+                log(`ROOT ESCALATION: UID ${res.uid} (ROOT CONFIRMED)`, "success");
+                log(`SPAWN: SSHD disparado via posix_spawn.`, "info");
+                log("CONEXÃO: ssh root@localhost -p 2222", "success");
+            } else {
+                log(`FALHA NO EXPLOIT: ${res.info || "Erro desconhecido"}`, "error");
             }
+            btn.disabled = false;
+        };
 
-            try {
-                print("Handshake nativo...");
-                const test = await bridge.postMessageWithReply({ action: "test_bridge" });
-                print("Status: " + test.info);
+        function runExploit() {
+            btn.disabled = true;
+            log("Disparando trigger via Legacy Bridge...", "warn");
 
-                print("Executando Catalyst-26 (PPL Bypass)...");
-                const res = await bridge.postMessageWithReply({ action: "pte_patch" });
-                print("Kernel Slide: " + res.slide);
-                print("ROOT: UID 0 escalado. SSHD disparado.");
-            } catch (e) {
-                print("CRITICAL: " + e);
+            // No A13 (iOS 26.4), usamos postMessage simples para evitar bloqueio de PAC-Reply
+            const bridge = window.webkit?.messageHandlers?.kernel;
+
+            if (bridge) {
+                log("Iniciando varredura allproc e patch de ucred...", "info");
+                bridge.postMessage({ action: "pte_patch" });
+            } else {
+                log("ERRO: Ponte 'kernel' não detectada no DOM.", "error");
+                btn.disabled = false;
             }
         }
+
+        window.onload = () => {
+            log("Aguardando comando do Native Host...", "info");
+        };
     </script>
 </body>
 </html>
