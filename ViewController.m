@@ -13,19 +13,25 @@
     
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     
-    // 1. O NOME: Mude de 'kernel' para 'A13_LAB' para testar colisão
+    // 1. INJEÇÃO MANUAL: Força o objeto existir no JS antes do HTML carregar
+    NSString *js = @"window.A13_LAB = window.webkit.messageHandlers.A13_LAB;";
+    WKUserScript *s = [[WKUserScript alloc] initWithSource:js 
+                                              injectionTime:WKUserScriptInjectionTimeAtDocumentStart 
+                                           forMainFrameOnly:YES];
+    [config.userContentController addUserScript:s];
+
+    // 2. REGISTRO: Nome único para evitar filtros do sistema
     [config.userContentController addScriptMessageHandler:self.driver name:@"A13_LAB"];
 
-    // 2. RETER O DRIVER: Vincular a WebView ao Driver para o Callback funcionar
     self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
-    self.driver.webView = self.webView; 
-    
+    self.driver.webView = self.webView; // Importante para o Callback
     [self.view addSubview:self.webView];
     
-    // 3. CARREGAMENTO: Use um delay de 200ms para garantir a injeção nativa
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        NSURL *url = [[NSBundle mainBundle] URLForResource:@"index" withExtension:@"html"];
-        [self.webView loadFileURL:url allowingReadAccessToURL:url.URLByDeletingLastPathComponent];
-    });
+    // 3. CARREGAMENTO: O iOS 26.4 bloqueia handlers em file:// 
+    // Carregar como String remove a restrição de 'Origin' do WebKit
+    NSString *path = [[NSBundle mainBundle] pathForResource:@"index" ofType:@"html"];
+    NSString *html = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    [self.webView loadHTMLString:html baseURL:[[NSBundle mainBundle] bundleURL]];
 }
+
 @end
