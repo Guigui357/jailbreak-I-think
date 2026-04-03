@@ -2,6 +2,17 @@
 #import <mach/mach.h>
 #import <spawn.h>
 #import <sys/stat.h>
+#import <sys/ioctl.h>
+#import <sys/socket.h>
+#import <netinet/in.h>
+#import <arpa/inet.h>
+#import <unistd.h>
+
+// Definição manual da macro caso o header do iOS a esconda
+#ifndef _IOWR
+#define _IOC(inout,group,num,len) (inout | ((len & 0x1fff) << 16) | ((group) << 8) | (num))
+#define _IOWR(g,n,t) _IOC(0x80000000|0x40000000,g,n,sizeof(t))
+#endif
 
 // --- APIs PRIVADAS ---
 extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm_size_t, mach_vm_address_t, mach_vm_size_t *);
