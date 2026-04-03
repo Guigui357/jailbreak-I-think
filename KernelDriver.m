@@ -31,10 +31,15 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 
 - (uint64_t)kread64:(uint64_t)addr {
     uint64_t val = 0;
-    mach_vm_size_t size = sizeof(uint64_t);
-    kern_return_t kr = mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)addr, (mach_vm_size_t)size, (mach_vm_address_t)&val, &size);
-    return (kr == KERN_SUCCESS) ? val : 0;
+    int fds[2];
+    pipe(fds);
+    // Tenta forçar a leitura do kernel para o pipe
+    write(fds[1], (void *)addr, 8); 
+    read(fds[0], &val, 8);
+    close(fds[0]); close(fds[1]);
+    return val;
 }
+
 
 - (void)kwrite64:(uint64_t)address value:(uint64_t)value {
     [self ppl_write_race:address value:value];
