@@ -102,7 +102,7 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
         
         // --- 2. BUSCA DO PID ---
         // No A13 (iOS 15/16), o PID costuma estar em 0x68 ou 0x60
-        pid_t found_pid = (pid_t)[self kread64:(proc + 0x68)];
+        pid_t found_pid = (pid_t)[self kread32:(proc + 0x60)];
         
         if (found_pid == my_pid) {
             uint64_t ucred = [self kread64:(proc + 0xD8)];
