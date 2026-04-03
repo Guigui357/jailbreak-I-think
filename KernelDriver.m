@@ -10,7 +10,7 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 
 // --- DEFINIÇÕES CRÍTICAS (Resolve o erro KERN_BASE_STATIC) ---
 #define KERN_BASE_STATIC 0xFFFFFFF007004000ULL
-#define OFFSET_ALLPROC     0x8F50000ULL
+#define OFFSET_ALLPROC     0x91F0000ULL
 #define OFFSET_TTBR1       0x8E10000ULL
 
 @implementation KernelDriver {
