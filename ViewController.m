@@ -5,13 +5,11 @@
 
 #import "ViewController.h"
 #import "KernelDriver.h"
-#import <WebKit/WebKit.h>
 
 @interface ViewController () <WKNavigationDelegate>
-@property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) KernelDriver *kernelDriver;
-@property (nonatomic, strong) UITextView *consoleView;
-@property (nonatomic, strong) UITextField *commandField;
+@property (nonatomic, strong) UIButton *sendButton;
+@property (nonatomic, strong) UIButton *exploitButton;
 @end
 
 @implementation ViewController
@@ -21,15 +19,13 @@
     
     self.view.backgroundColor = [UIColor blackColor];
     
-    // Configurar WebView
+    // Configurar WebView (oculta, apenas para bridge)
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
-    WKUserContentController *controller = [[WKUserContentController alloc] init];
-    config.userContentController = controller;
-    
     self.webView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:config];
     self.webView.navigationDelegate = self;
     self.webView.backgroundColor = [UIColor blackColor];
     self.webView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.webView.hidden = YES; // Esconder, apenas para comunicação
     [self.view addSubview:self.webView];
     
     // Inicializar KernelDriver
@@ -54,31 +50,31 @@
     [self.view addSubview:self.commandField];
     
     // Botão de enviar
-    UIButton *sendButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [sendButton setTitle:@"▶" forState:UIControlStateNormal];
-    [sendButton setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
-    sendButton.backgroundColor = [UIColor colorWithRed:0.0 green:1.0 blue:0.0 alpha:1.0];
-    sendButton.titleLabel.font = [UIFont boldSystemFontOfSize:18];
-    sendButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [sendButton addTarget:self action:@selector(executeCommand) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:sendButton];
+    self.sendButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.sendButton setTitle:@"▶" forState:UIControlStateNormal];
+    [self.sendButton setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
+    self.sendButton.backgroundColor = [UIColor colorWithRed:0.0 green:1.0 blue:0.0 alpha:1.0];
+    self.sendButton.titleLabel.font = [UIFont boldSystemFontOfSize:18];
+    self.sendButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.sendButton addTarget:self action:@selector(executeCommand) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.sendButton];
     
     // Botão de exploit
-    UIButton *exploitButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [exploitButton setTitle:@"🚀 EXECUTAR EXPLOIT" forState:UIControlStateNormal];
-    [exploitButton setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
-    exploitButton.backgroundColor = [UIColor colorWithRed:1.0 green:0.5 blue:0.0 alpha:1.0];
-    exploitButton.titleLabel.font = [UIFont boldSystemFontOfSize:16];
-    exploitButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [exploitButton addTarget:self action:@selector(runExploit) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:exploitButton];
+    self.exploitButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.exploitButton setTitle:@"🚀 EXECUTAR EXPLOIT" forState:UIControlStateNormal];
+    [self.exploitButton setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
+    self.exploitButton.backgroundColor = [UIColor colorWithRed:1.0 green:0.5 blue:0.0 alpha:1.0];
+    self.exploitButton.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    self.exploitButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.exploitButton addTarget:self action:@selector(runExploit) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.exploitButton];
     
     // Layout
     [NSLayoutConstraint activateConstraints:@[
         [self.webView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
         [self.webView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.webView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [self.webView.heightAnchor constraintEqualToConstant:0], // Oculto, apenas para bridge
+        [self.webView.heightAnchor constraintEqualToConstant:0],
         
         [self.consoleView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:10],
         [self.consoleView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:10],
@@ -87,18 +83,18 @@
         
         [self.commandField.topAnchor constraintEqualToAnchor:self.consoleView.bottomAnchor constant:10],
         [self.commandField.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:10],
-        [self.commandField.trailingAnchor constraintEqualToAnchor:sendButton.leadingAnchor constant:-10],
+        [self.commandField.trailingAnchor constraintEqualToAnchor:self.sendButton.leadingAnchor constant:-10],
         [self.commandField.heightAnchor constraintEqualToConstant:44],
         
-        [sendButton.topAnchor constraintEqualToAnchor:self.consoleView.bottomAnchor constant:10],
-        [sendButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-10],
-        [sendButton.widthAnchor constraintEqualToConstant:50],
-        [sendButton.heightAnchor constraintEqualToConstant:44],
+        [self.sendButton.topAnchor constraintEqualToAnchor:self.consoleView.bottomAnchor constant:10],
+        [self.sendButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-10],
+        [self.sendButton.widthAnchor constraintEqualToConstant:50],
+        [self.sendButton.heightAnchor constraintEqualToConstant:44],
         
-        [exploitButton.topAnchor constraintEqualToAnchor:self.commandField.bottomAnchor constant:10],
-        [exploitButton.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:10],
-        [exploitButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-10],
-        [exploitButton.heightAnchor constraintEqualToConstant:50]
+        [self.exploitButton.topAnchor constraintEqualToAnchor:self.commandField.bottomAnchor constant:10],
+        [self.exploitButton.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:10],
+        [self.exploitButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-10],
+        [self.exploitButton.heightAnchor constraintEqualToConstant:50]
     ]];
     
     // Carregar HTML bridge
@@ -107,54 +103,10 @@
     
     [self log:@"KernelDriver loaded - Ready"];
     [self log:@"Target: iPhone 11 (A13) iOS 26.3"];
-    [self log:@"Click EXECUTAR EXPLOIT to start"];
 }
 
 - (NSString *)htmlBridge {
-    return @"\
-        <!DOCTYPE html>\
-        <html>\
-        <head>\
-            <meta name='viewport' content='width=device-width, initial-scale=1.0'>\
-            <style>\
-                body { background: #000; color: #0f0; font-family: monospace; padding: 10px; }\
-                .status { color: #0f0; }\
-                .root { color: #f0f; }\
-            </style>\
-        </head>\
-        <body>\
-            <h2>⚡ KernelDriver Bridge ⚡</h2>\
-            <div id='status'>Loading...</div>\
-            <script>\
-                window.KernelDriver = {\
-                    call: function(action, data) {\
-                        return new Promise((resolve, reject) => {\
-                            var message = {action: action};\
-                            if (data) Object.assign(message, data);\
-                            window.webkit.messageHandlers.kernelDriver.postMessage(message);\
-                            window._callback = {resolve, reject};\
-                        });\
-                    },\
-                    getStatus: function() { return this.call('getStatus'); },\
-                    leakSlide: function() { return this.call('leakSlide'); },\
-                    ptePatch: function() { return this.call('ptePatch'); },\
-                    executeCommand: function(cmd) { return this.call('executeCommand', {command: cmd}); }\
-                };\
-                \
-                window._handleReply = function(reply, error) {\
-                    if (window._callback) {\
-                        if (error) window._callback.reject(error);\
-                        else window._callback.resolve(reply);\
-                        window._callback = null;\
-                    }\
-                };\
-                \
-                document.getElementById('status').innerHTML = '✓ Ready';\
-                console.log('Bridge loaded');\
-            </script>\
-        </body>\
-        </html>\
-    ";
+    return @"<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width'><style>body{background:#000;color:#0f0;font-family:monospace;}</style></head><body><h2>KernelDriver Bridge</h2><script>window.KernelDriver={call:function(a,d){return new Promise((r,j)=>{window.webkit.messageHandlers.kernelDriver.postMessage({action:a,...d});window._cb={r,j}});},getStatus:function(){return this.call('getStatus');},leakSlide:function(){return this.call('leakSlide');},ptePatch:function(){return this.call('ptePatch');},executeCommand:function(c){return this.call('executeCommand',{command:c});}};window._handleReply=function(r,e){if(window._cb){if(e)window._cb.j(e);else window._cb.r(r);window._cb=null;}};document.body.innerHTML+='<div>✓ Bridge ready</div>';</script></body></html>";
 }
 
 - (void)log:(NSString *)message {
@@ -178,8 +130,10 @@
         return;
     }
     
-    [self.kernelDriver.webView evaluateJavaScript:[NSString stringWithFormat:@"KernelDriver.executeCommand('%@')", cmd]
-                                completionHandler:nil];
+    // Usar KernelDriver diretamente
+    [self.kernelDriver executeCommand:cmd withCallback:^(NSString *result) {
+        [self log:result];
+    }];
 }
 
 - (void)runExploit {
@@ -187,81 +141,14 @@
     [self log:@"Starting kernel exploit..."];
     [self log:@"========================================"];
     
-    // Step 1: Leak kernel slide
-    [self log:@"[1/4] Leaking kernel slide..."];
-    [self.kernelDriver.webView evaluateJavaScript:@"KernelDriver.leakSlide()" completionHandler:^(id result, NSError *error) {
-        if (error) {
-            [self log:[NSString stringWithFormat:@"[!] Failed to leak slide: %@", error]];
-            return;
-        }
-        
-        NSDictionary *dict = (NSDictionary *)result;
-        if ([dict[@"success"] boolValue]) {
-            [self log:[NSString stringWithFormat:@"[+] Kernel slide: %@", dict[@"slide"]]];
-            
-            // Step 2: PTE Patch (root)
-            [self log:@"[2/4] Executing PTE patch..."];
-            [self.kernelDriver.webView evaluateJavaScript:@"KernelDriver.ptePatch()" completionHandler:^(id result2, NSError *error2) {
-                if (error2) {
-                    [self log:[NSString stringWithFormat:@"[!] PTE patch failed: %@", error2]];
-                    return;
-                }
-                
-                NSDictionary *resultDict = (NSDictionary *)result2;
-                if ([resultDict[@"success"] boolValue]) {
-                    [self log:[NSString stringWithFormat:@"[+] Root access acquired! UID: %@", resultDict[@"uid"]]];
-                    [self log:@"[3/4] Root privileges obtained"];
-                    [self log:@"[4/4] Jailbreak complete!"];
-                    
-                    [self log:@""];
-                    [self log:@"╔════════════════════════════════════════════════════╗"];
-                    [self log:@"║  ✅ JAILBREAK COMPLETO! ROOT ACCESS ACQUIRED!     ║"];
-                    [self log:@"╠════════════════════════════════════════════════════╣"];
-                    [self log:@"║  • UID: 0 (root)                                  ║"];
-                    [self log:@"║  • Kernel R/W: ACTIVE                             ║"];
-                    [self log:@"║  • PPL: BYPASSED                                  ║"];
-                    [self log:@"║  • Type 'id' to verify                            ║"];
-                    [self log:@"╚════════════════════════════════════════════════════╝"];
-                    
-                    // Instalar Sileo
-                    [self installSileo];
-                    
-                } else {
-                    [self log:@"[!] Root escalation failed"];
-                }
-            }];
+    [self.kernelDriver executeExploitWithCallback:^(BOOL success, NSString *message) {
+        if (success) {
+            [self log:message];
+            [self log:@"✅ JAILBREAK COMPLETO! Root access acquired!"];
         } else {
-            [self log:@"[!] Failed to leak kernel slide"];
+            [self log:[NSString stringWithFormat:@"❌ Exploit failed: %@", message]];
         }
     }];
-}
-
-- (void)installSileo {
-    [self log:@""];
-    [self log:@"Installing Sileo package manager..."];
-    
-    NSArray *commands = @[
-        @"mount -uw / 2>/dev/null",
-        @"mkdir -p /var/lib/apt/lists/partial 2>/dev/null",
-        @"curl -L -o /tmp/procursus.deb https://github.com/ProcursusTeam/Procursus/releases/download/v4.0/procursus_4.0_iphoneos-arm64.deb 2>/dev/null",
-        @"dpkg -i /tmp/procursus.deb 2>/dev/null",
-        @"echo 'deb https://repo.sileo.app/ ./' > /etc/apt/sources.list.d/sileo.list",
-        @"curl -L https://repo.sileo.app/key.gpg | apt-key add - 2>/dev/null",
-        @"apt update 2>/dev/null",
-        @"apt install -y sileo 2>/dev/null",
-        @"uicache -a 2>/dev/null",
-        @"killall SpringBoard 2>/dev/null"
-    ];
-    
-    for (NSString *cmd in commands) {
-        [self.kernelDriver.webView evaluateJavaScript:[NSString stringWithFormat:@"KernelDriver.executeCommand('%@')", cmd]
-                                    completionHandler:nil];
-        [NSThread sleepForTimeInterval:0.5];
-        [self log:[NSString stringWithFormat:@"[*] %@", [cmd substringToIndex:MIN(50, cmd.length)]]];
-    }
-    
-    [self log:@"[+] Sileo installed successfully!"];
-    [self log:@"[+] Icon should appear on SpringBoard after respring"];
 }
 
 @end
