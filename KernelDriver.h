@@ -3,6 +3,8 @@
 
 @interface KernelDriver : NSObject <WKScriptMessageHandlerWithReply>
 
+@property (nonatomic, weak) WKWebView *webView; // Resolve o erro no ViewController
+
 - (uint64_t)kread64:(uint64_t)addr;
 - (void)ppl_write_race:(uint64_t)vaddr value:(uint64_t)val;
 - (uint64_t)getActualKernelSlide;
