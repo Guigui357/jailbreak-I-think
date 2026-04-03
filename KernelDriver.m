@@ -128,12 +128,13 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 
 // Auxiliar para ver no iPhone
 - (void)logToWeb:(NSString *)text {
-    NSLog(@"%@", text);
+    NSLog(@"[KERNEL] %@", text);
+    // Envia para o terminal da interface
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSString *js = [NSString stringWithFormat:@"if(window.addLog){ addLog('%@'); } else { console.log('%@'); }", text, text];
-        [self->_webView evaluateJavaScript:js completionHandler:nil];
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"KernelLogNotification" object:text];
     });
 }
+
 
 
 
