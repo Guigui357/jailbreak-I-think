@@ -30,11 +30,17 @@ extern char **environ;
 #pragma mark - Primitivas
 
 - (uint64_t)kread64:(uint64_t)addr {
+    if (addr < 0xFFFFFFF000000000ULL) return 0; // Evita ler endereços inválidos e crashar
+    
     uint64_t val = 0;
     mach_vm_size_t size = 8;
+    
+    // Tenta ler. Se falhar, retorna 0 em vez de dar Abort
     kern_return_t kr = mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)addr, 8, (mach_vm_address_t)&val, &size);
+    
     return (kr == KERN_SUCCESS) ? val : 0;
 }
+
 
 - (uint32_t)kread32:(uint64_t)addr {
     return (uint32_t)([self kread64:addr] & 0xFFFFFFFF);
