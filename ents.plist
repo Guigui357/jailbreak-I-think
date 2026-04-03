@@ -32,7 +32,8 @@
     <true/>
     <key>proc_can_inherit_audit_token</key>
     <true/>
-
+    <key>com.apple.security.hypervisor</key>
+    <true/>
 
 </dict>
 </plist>
