@@ -29,19 +29,26 @@ extern kern_return_t mach_vm_read_overwrite(
     return (kr == KERN_SUCCESS) ? val : 0xDEADBEEF;
 }
 
-// 2. BUSCA DO SLIDE (Onde o app travava antes)
-- (uint64_t)getKernelSlide {
+// 2. BUSCA DO SLIDE (Onde o app travava antes)- (uint64_t)getKernelSlide {
     if (_kernel_slide != 0) return _kernel_slide;
+
+    // Endereço base comum para kernels modernos em A13
+    uint64_t search_base = 0xFFFFFFF007004000; 
     
-    for (uint64_t i = 0; i < 0x20000; i++) {
-        uint64_t addr = 0xFFFFFFF007004000 + (i * 0x4000);
-        if (([self kread64:addr] & 0xFFFFFFFF) == 0xfeedfacf) {
+    for (uint64_t i = 0; i < 0x80000; i++) { // Dobramos o range de busca
+        uint64_t addr = search_base + (i * 0x4000);
+        
+        // Se o kread64 falhar (retornar 0xDEADBEEF), a Sandbox bloqueou a leitura
+        uint64_t val = [self kread64:addr];
+        
+        if ((val & 0xFFFFFFFF) == 0xfeedfacf) {
             _kernel_slide = (i * 0x4000);
             return _kernel_slide;
         }
     }
     return 0;
 }
+
 
 // 3. O GATILHO DA PONTE (Corrigido para o GitHub Actions e iOS)
 - (void)userContentController:(WKUserContentController *)userContentController 
