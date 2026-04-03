@@ -32,9 +32,12 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 - (uint64_t)kread64:(uint64_t)addr {
     uint64_t val = 0;
     mach_vm_size_t size = 8;
-    // Usamos a API nativa, mas com uma verificação de segurança
+    // Tenta ler com privilégios de tarefa (necessita get-task-allow)
     kern_return_t kr = mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)addr, 8, (mach_vm_address_t)&val, &size);
-    if (kr != KERN_SUCCESS) return 0; // Retorna 0 em vez de travar
+    if (kr != KERN_SUCCESS) {
+        // Se falhar, o endereço está protegido ou o slide está errado
+        return 0;
+    }
     return val;
 }
 
