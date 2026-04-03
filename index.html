@@ -14,7 +14,7 @@
         .error { color: #ff5555; border-left-color: #ff5555; background: rgba(255,0,0,0.1); }
         .warn { color: #f1fa8c; border-left-color: #f1fa8c; }
         .controls { margin-top: 15px; }
-        button { width: 100%; background: #000; color: #00ff41; border: 1px solid #00ff41; padding: 18px; font-weight: bold; border-radius: 4px; font-family: inherit; font-size: 14px; cursor: pointer; transition: 0.2s; }
+        button { width: 100%; background: #000; color: #00ff41; border: 1px solid #00ff41; padding: 18px; font-weight: bold; border-radius: 4px; font-family: inherit; font-size: 14px; cursor: pointer; }
         button:active { background: #00ff41; color: #000; }
         button:disabled { border-color: #333; color: #333; cursor: wait; }
     </style>
@@ -23,7 +23,7 @@
 
     <div id="header">
         <span>[ EXPLOIT: CATALYST-26 ]</span>
-        <span>BUILD: 23E5207Q (A13)</span>
+        <span>A13 - BUILD 23E5207Q</span>
     </div>
 
     <div id="console">
@@ -46,38 +46,41 @@
             consoleEl.scrollTop = consoleEl.scrollHeight;
         }
 
-        // 1. RECEPTOR DE RESPOSTA (O KernelDriver.m chama isso via evaluateJavaScript)
+        // 1. O CALLBACK (O Native chama isso via evaluateJavaScript)
         window.handleNativeResponse = function(res) {
             if (res.status === "SUCCESS") {
                 log(`KASLR BYPASS: Slide em ${res.slide}`, "success");
-                log(`PPL BYPASS: Escrita em PTE confirmada.`, "success");
+                log(`PPL BYPASS: PTE writable confirmada.`, "success");
                 log(`ROOT ESCALATION: UID ${res.uid} (ROOT CONFIRMED)`, "success");
                 log(`SPAWN: SSHD disparado via posix_spawn.`, "info");
                 log("CONEXÃO: ssh root@localhost -p 2222", "success");
             } else {
-                log(`FALHA NO EXPLOIT: ${res.info || "Erro desconhecido"}`, "error");
+                log(`FALHA NO EXPLOIT: ${res.info || "Erro no KernelDriver"}`, "error");
             }
             btn.disabled = false;
         };
 
         function runExploit() {
             btn.disabled = true;
-            log("Disparando trigger via Legacy Bridge...", "warn");
+            log("Varrendo window.webkit.messageHandlers...", "warn");
 
-            // No A13 (iOS 26.4), usamos postMessage simples para evitar bloqueio de PAC-Reply
-            const bridge = window.webkit?.messageHandlers?.kernel;
+            // Tenta o atalho global window.A13_LAB ou o caminho oficial do WebKit
+            const bridge = window.A13_LAB || window.webkit?.messageHandlers?.A13_LAB;
 
             if (bridge) {
-                log("Iniciando varredura allproc e patch de ucred...", "info");
+                log("Ponte detectada! Disparando trigger nativo...", "success");
                 bridge.postMessage({ action: "pte_patch" });
             } else {
-                log("ERRO: Ponte 'kernel' não detectada no DOM.", "error");
+                // Debug para ver o que o iOS injetou
+                const handlers = Object.keys(window.webkit?.messageHandlers || {});
+                log(`ERRO: Ponte não detectada. Handlers: [${handlers.join(', ')}]`, "error");
+                log("Dica: Verifique se usou loadHTMLString no ViewController.", "info");
                 btn.disabled = false;
             }
         }
 
         window.onload = () => {
-            log("Aguardando comando do Native Host...", "info");
+            log("Aguardando sinal do Native Host...", "info");
         };
     </script>
 </body>
