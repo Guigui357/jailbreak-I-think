@@ -1,121 +1,38 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Catalyst-26 | A13 Kernel Lab</title>
-    <style>
-        body { background: #050505; color: #00ff41; font-family: 'Courier New', monospace; margin: 0; padding: 15px; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-        #header { font-size: 11px; border-bottom: 1px solid #1a1a1a; padding-bottom: 8px; margin-bottom: 10px; color: #444; display: flex; justify-content: space-between; text-transform: uppercase; }
-        #console { flex-grow: 1; overflow-y: auto; background: rgba(0, 5, 0, 0.9); border: 1px solid #111; padding: 12px; font-size: 12px; border-radius: 4px; box-shadow: inset 0 0 20px #000; }
-        .line { margin-bottom: 5px; word-break: break-all; border-left: 2px solid transparent; padding-left: 8px; }
-        .info { color: #8be9fd; border-left-color: #8be9fd; }
-        .success { color: #50fa7b; border-left-color: #50fa7b; font-weight: bold; }
-        .error { color: #ff5555; border-left-color: #ff5555; background: rgba(255,0,0,0.1); }
-        .warn { color: #f1fa8c; border-left-color: #f1fa8c; }
-        .controls { margin-top: 15px; }
-        button { width: 100%; background: #000; color: #00ff41; border: 1px solid #00ff41; padding: 18px; font-weight: bold; border-radius: 4px; font-family: inherit; font-size: 14px; cursor: pointer; transition: 0.2s; }
-        button:active { background: #00ff41; color: #000; }
-        button:disabled { border-color: #333; color: #333; cursor: wait; }
-    </style>
+    <style>body { background: #000; color: #0f4; font-family: monospace; padding: 20px; }</style>
 </head>
 <body>
-
-    <div id="header">
-        <span>[ EXPLOIT: CATALYST-26 ]</span>
-        <span>BUILD: 23E5207Q (A13)</span>
-    </div>
-
-    <div id="console">
-        <div class="line info">[*] Terminal Catalyst-26 inicializado.</div>
-    </div>
-
-    <div class="controls">
-        <button id="mainBtn" onclick="runExploit()">EXECUTE PTE BYPASS & SPAWN SSHD</button>
-    </div>
+    <div id="log">> Aguardando Catalyst-26...</div>
+    <button onclick="run()" style="width:100%; padding:20px; background:#000; color:#0f4; border:1px solid #0f4; margin-top:20px;">RUN EXPLOIT</button>
 
     <script>
-        const consoleEl = document.getElementById('console');
-        const btn = document.getElementById('mainBtn');
+        const out = document.getElementById('log');
+        const print = (m) => out.innerHTML += "<br>> " + m;
 
-        function log(msg, type = 'info') {
-            const div = document.createElement('div');
-            div.className = `line ${type}`;
-            div.innerHTML = `> ${msg}`;
-            consoleEl.appendChild(div);
-            consoleEl.scrollTop = consoleEl.scrollHeight;
-        }
-
-        /**
-         * Scanner de Ponte Nativa (A13/iOS 26.4)
-         * Varre namespaces e protótipos de memória.
-         */
-        async function getKernelBridge() {
-            log("Buscando ponte nativa (Deep Scan)...", "warn");
+        async function run() {
+            // Busca a ponte em todos os escopos injetados
+            const bridge = window.kernel || window.webkit?.messageHandlers?.kernel;
             
-            for (let i = 0; i < 20; i++) { // 2 segundos de tentativas
-                // Tenta capturar o atalho global injetado via UserScript ou o objeto direto
-                const b = window.kernel || 
-                          window.webkit?.messageHandlers?.kernel || 
-                          window.webkit?.messageHandlers?.default?.kernel;
-
-                if (b && typeof b.postMessageWithReply === 'function') {
-                    return b;
-                }
-                
-                // Fallback para Proxy Protótipo (iOS Beta behavior)
-                if (b && b.__proto__ && typeof b.__proto__.postMessageWithReply === 'function') {
-                    return b;
-                }
-
-                await new Promise(r => setTimeout(r, 100));
-            }
-            return null;
-        }
-
-        async function runExploit() {
-            btn.disabled = true;
-            const bridge = await getKernelBridge();
-
-            if (!bridge) {
-                log("FALHA CRÍTICA: postMessageWithReply não injetado.", "error");
-                log("Verifique se compilou com -arch arm64e e assinou com Entitlements.", "info");
-                btn.disabled = false;
+            if (!bridge || typeof bridge.postMessageWithReply !== 'function') {
+                print("ERRO: postMessageWithReply não injetado. Verifique a arquitetura arm64e.");
                 return;
             }
 
             try {
-                log("Ponte validada! Estabelecendo handshake nativo...", "success");
+                print("Handshake nativo...");
                 const test = await bridge.postMessageWithReply({ action: "test_bridge" });
-                log(`HANDSHAKE: ${test.info}`, "success");
+                print("Status: " + test.info);
 
-                log("Disparando Catalyst-26 (PPL/PTE Bypass Race)...", "warn");
+                print("Executando Catalyst-26 (PPL Bypass)...");
                 const res = await bridge.postMessageWithReply({ action: "pte_patch" });
-
-                if (res.status === "SUCCESS") {
-                    log(`KASLR BYPASS: Slide em ${res.slide}`, "success");
-                    log("PPL BYPASS: Tabelas de página RW.", "success");
-                    log("ROOT ESCALATION: UID 0 obtido via PPLRW.", "success");
-                    log(`SPAWN: SSHD ativo (PID: ${res.pid || 'OK'}).`, "info");
-                    log("ssh root@localhost -p 2222", "success");
-                } else {
-                    log(`FALHA NO EXPLOIT: ${res.info || "Erro desconhecido"}`, "error");
-                }
-
-            } catch (err) {
-                log(`EXCEÇÃO DE IPC: ${err.message || err}`, "error");
-                log("Causa provável: Sandbox violation ou SIGKILL (PAC-check).", "warn");
-            } finally {
-                btn.disabled = false;
+                print("Kernel Slide: " + res.slide);
+                print("ROOT: UID 0 escalado. SSHD disparado.");
+            } catch (e) {
+                print("CRITICAL: " + e);
             }
         }
-
-        // Check inicial
-        window.onload = async () => {
-            const bridge = await getKernelBridge();
-            if (bridge) log("Catalyst-26 Bridge: ONLINE", "success");
-            else log("Aguardando injeção do KernelDriver pelo Native Host...", "warn");
-        };
     </script>
 </body>
 </html>
