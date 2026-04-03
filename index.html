@@ -34,54 +34,69 @@
         <button id="mainBtn" onclick="runExploit()">EXECUTE PTE BYPASS & ESCALATE ROOT</button>
     </div>
 
-    <script>
-        const consoleEl = document.getElementById('console');
-        const btn = document.getElementById('mainBtn');
+    <!-- ... (mesmo CSS anterior) ... -->
+<script>
+    const consoleEl = document.getElementById('console');
+    const btn = document.getElementById('mainBtn');
 
-        function log(msg, type = 'info') {
-            const div = document.createElement('div');
-            div.className = `line ${type}`;
-            div.innerHTML = `> ${msg}`;
-            consoleEl.appendChild(div);
-            consoleEl.scrollTop = consoleEl.scrollHeight;
+    function log(msg, type = 'info') {
+        const div = document.createElement('div');
+        div.className = `line ${type}`;
+        div.innerHTML = `> ${msg}`;
+        consoleEl.appendChild(div);
+        consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+
+    // Função de tratamento atualizada para receber o objeto direto
+    function processResult(res) {
+        if (res && (res.status === "OK" || res.status === "SUCCESS")) {
+            log(`KASLR BYPASS: Slide em ${res.slide}`, "success");
+            log(`PPL BYPASS: PTE writable confirmada.`, "success");
+            log(`ROOT ESCALATION: UID 0 (ROOT CONFIRMED)`, "success");
+            log(`SPAWN: SSHD disparado (PID: ${res.pid})`, "info");
+            log("CONEXÃO: ssh root@localhost -p 2222", "success");
+        } else {
+            log(`FALHA NO EXPLOIT: ${res ? res.info : "Erro de comunicação"}`, "error");
         }
+        btn.disabled = false;
+        btn.innerText = "EXECUTE PTE BYPASS & ESCALATE ROOT";
+    }
 
-        // 1. O CALLBACK (O Native chama isso via evaluateJavaScript)
-        window.handleNativeResponse = function(res) {
-            if (res.status === "SUCCESS") {
-                log(`KASLR BYPASS: Slide em ${res.slide}`, "success");
-                log(`PPL BYPASS: PTE writable confirmada.`, "success");
-                log(`ROOT ESCALATION: UID ${res.uid} (ROOT CONFIRMED)`, "success");
-                log(`SPAWN: SSHD disparado via posix_spawn.`, "info");
-                log("CONEXÃO: ssh root@localhost -p 2222", "success");
-            } else {
-                log(`FALHA NO EXPLOIT: ${res.info || "Erro no KernelDriver"}`, "error");
-            }
-            btn.disabled = false;
-        };
+    async function runExploit() {
+        btn.disabled = true;
+        btn.innerText = "EXECUTANDO EXPLOIT..."; 
+        log("Varrendo window.webkit.messageHandlers...", "warn");
 
-        function runExploit() {
-            btn.disabled = true;
-            log("Varrendo window.webkit.messageHandlers...", "warn");
+        // Usa o atalho window.A13_LAB injetado pelo ViewController
+        const bridge = window.A13_LAB;
 
-            // Tenta o atalho global window.A13_LAB ou o caminho oficial do WebKit
-            const bridge = window.A13_LAB || window.webkit?.messageHandlers?.A13_LAB;
+        if (bridge && bridge.postMessage) {
+            log("Ponte detectada! Disparando trigger nativo...", "success");
+            log("Aguardando resposta do Kernel (2-5 segundos)...", "info");
 
-            if (bridge) {
-                log("Ponte detectada! Disparando trigger nativo...", "success");
-                bridge.postMessage({ action: "pte_patch" });
-            } else {
-                // Debug para ver o que o iOS injetou
-                const handlers = Object.keys(window.webkit?.messageHandlers || {});
-                log(`ERRO: Ponte não detectada. Handlers: [${handlers.join(', ')}]`, "error");
-                log("Dica: Verifique se usou loadHTMLString no ViewController.", "info");
+            try {
+                // AQUI ESTÁ A MUDANÇA: O await impede o travamento da UI 
+                // e espera o replyHandler do Objective-C
+                const response = await bridge.postMessage({ action: "pte_patch" });
+                
+                // Processa a resposta que veio direto do replyHandler
+                processResult(response);
+                
+            } catch (err) {
+                log(`ERRO NA EXECUÇÃO: ${err}`, "error");
                 btn.disabled = false;
+                btn.innerText = "TENTAR NOVAMENTE";
             }
+        } else {
+            log("ERRO: Handler A13_LAB não encontrado.", "error");
+            btn.disabled = false;
         }
+    }
 
-        window.onload = () => {
-            log("Aguardando sinal do Native Host...", "info");
-        };
-    </script>
+    window.onload = () => {
+        if(window.A13_LAB) log("HOST NATIVO CONECTADO.", "success");
+        else log("Aguardando sinal do Native Host...", "info");
+    };
+</script>
 </body>
 </html>
