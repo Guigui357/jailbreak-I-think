@@ -59,7 +59,7 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
     if (_kernelSlide != 0) return _kernelSlide;
 
     // Tenta encontrar um serviço comum que vaza ponteiros no A13
-    io_service_t service = IOServiceGetMatchingService(kIOMasterPortDefault, IOServiceMatching("IOPlatformExpertDevice"));
+    io_service_t service = IOServiceGetMatchingService(0, IOServiceMatching("IOPlatformExpertDevice"));
     
     if (service != IO_OBJECT_NULL) {
         // No iOS 19, o ID do objeto IOKit às vezes contém o ponteiro do kernel deslocado
