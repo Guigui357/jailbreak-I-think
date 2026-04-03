@@ -1,13 +1,19 @@
+//
+//  KernelDriver.h
+//  JailbreakApp
+//
+
 #import <Foundation/Foundation.h>
 #import <WebKit/WebKit.h>
 
-@interface KernelDriver : NSObject <WKScriptMessageHandlerWithReply>
+NS_ASSUME_NONNULL_BEGIN
 
-@property (nonatomic, weak) WKWebView *webView; // Resolve o erro no ViewController
+@interface KernelDriver : NSObject <WKScriptMessageHandler>
 
-- (uint64_t)kread64:(uint64_t)addr;
-- (void)ppl_write_race:(uint64_t)vaddr value:(uint64_t)val;
-- (uint64_t)getActualKernelSlide;
-- (uint64_t)leak_kobject_addr:(mach_port_t)port;
+- (instancetype)initWithWebView:(WKWebView *)webView;
+- (void)injectJavaScript;
+- (uint64_t)getCurrentUID;
 
 @end
+
+NS_ASSUME_NONNULL_END
