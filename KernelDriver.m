@@ -2,16 +2,30 @@
 #import <mach/mach.h>
 #import <spawn.h>
 
+// --- ADICIONE ESTAS DECLARAÇÕES MANUAIS AQUI ---
+typedef kern_return_t (*mach_vm_read_overwrite_t)(vm_map_t, mach_vm_address_t, mach_vm_size_t, mach_vm_address_t, mach_vm_size_t *);
+
+// Definição externa para o compilador encontrar a função
+extern kern_return_t mach_vm_read_overwrite(
+    vm_map_t target_task,
+    mach_vm_address_t address,
+    mach_vm_size_t size,
+    mach_vm_address_t data,
+    mach_vm_size_t *out_size
+);
+// ----------------------------------------------
+
 @implementation KernelDriver {
     uint64_t _kernel_slide;
 }
 
-// 1. LEITURA SEM TRAVAR (Usa o mach_vm_read nativo)
 - (uint64_t)kread64:(uint64_t)addr {
     uint64_t val = 0;
     mach_vm_size_t size = sizeof(uint64_t);
-    // Nota: Se não estiver em ambiente Jailbreak/PPLBypass, isso retorna erro aqui
+    
+    // O erro "undeclared function" sumirá agora que a extern está acima
     kern_return_t kr = mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)addr, (mach_vm_size_t)size, (mach_vm_address_t)&val, &size);
+    
     return (kr == KERN_SUCCESS) ? val : 0xDEADBEEF;
 }
 
