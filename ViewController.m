@@ -1,6 +1,5 @@
 #import "ViewController.h"
 #import "KernelDriver.h"
-#import <WebKit/WebKit.h>
 
 @interface ViewController ()
 @property (strong, nonatomic) KernelDriver *driver; 
@@ -10,32 +9,23 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    
-    // 1. Instância do Driver (Retenção forte)
     self.driver = [[KernelDriver alloc] init];
     
-    // 2. Configuração da WebView
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     
-    // SINTAXE CORRETA: addScriptMessageHandlerWithReply REQUER o contentWorld
-    // Usamos defaultClientWorld para máxima compatibilidade no iOS 26.4
-    [config.userContentController addScriptMessageHandlerWithReply:self.driver 
-                                                      contentWorld:[WKContentWorld defaultClientWorld] 
-                                                              name:@"kernel"];
+    // 1. O NOME: Mude de 'kernel' para 'A13_LAB' para testar colisão
+    [config.userContentController addScriptMessageHandler:self.driver name:@"A13_LAB"];
 
-    // 3. Permissões de Sandbox e JIT para o A13
-    [config.preferences setValue:@YES forKey:@"allowFileAccessFromFileURLs"];
-    [config setValue:@YES forKey:@"allowUniversalAccessFromFileURLs"];
-
+    // 2. RETER O DRIVER: Vincular a WebView ao Driver para o Callback funcionar
     self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
+    self.driver.webView = self.webView; 
+    
     [self.view addSubview:self.webView];
     
-    // 4. Carregar o HTML como String para evitar restrições de 'file://'
-    NSString *path = [[NSBundle mainBundle] pathForResource:@"index" ofType:@"html"];
-    if (path) {
-        NSString *html = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-        [self.webView loadHTMLString:html baseURL:[[NSBundle mainBundle] bundleURL]];
-    }
+    // 3. CARREGAMENTO: Use um delay de 200ms para garantir a injeção nativa
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSURL *url = [[NSBundle mainBundle] URLForResource:@"index" withExtension:@"html"];
+        [self.webView loadFileURL:url allowingReadAccessToURL:url.URLByDeletingLastPathComponent];
+    });
 }
-
 @end
