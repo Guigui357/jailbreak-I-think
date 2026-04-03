@@ -11,7 +11,8 @@ NS_ASSUME_NONNULL_BEGIN
 @interface KernelDriver : NSObject <WKScriptMessageHandler>
 
 - (instancetype)initWithWebView:(WKWebView *)webView;
-- (void)injectJavaScript;
+- (void)executeCommand:(NSString *)command withCallback:(void(^)(NSString *result))callback;
+- (void)executeExploitWithCallback:(void(^)(BOOL success, NSString *message))callback;
 - (uint64_t)getCurrentUID;
 
 @end
