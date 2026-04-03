@@ -14,89 +14,93 @@
         .error { color: #ff5555; border-left-color: #ff5555; background: rgba(255,0,0,0.1); }
         .warn { color: #f1fa8c; border-left-color: #f1fa8c; }
         .controls { margin-top: 15px; }
-        button { width: 100%; background: #000; color: #00ff41; border: 1px solid #00ff41; padding: 18px; font-weight: bold; border-radius: 4px; font-family: inherit; font-size: 14px; cursor: pointer; }
+        button { width: 100%; background: #000; color: #00ff41; border: 1px solid #00ff41; padding: 18px; font-weight: bold; border-radius: 4px; font-family: inherit; font-size: 14px; cursor: pointer; transition: all 0.2s; }
         button:active { background: #00ff41; color: #000; }
-        button:disabled { border-color: #333; color: #333; cursor: wait; }
+        button:disabled { border-color: #333; color: #333; cursor: wait; opacity: 0.5; }
     </style>
 </head>
 <body>
 
     <div id="header">
         <span>[ EXPLOIT: CATALYST-26 ]</span>
-        <span>A13 - BUILD 23E5207Q</span>
+        <span>A13 - IPHONE 11</span>
     </div>
 
     <div id="console">
-        <div class="line info">[*] Terminal Catalyst-26 Pronto.</div>
+        <div class="line info">[*] Terminal Catalyst-26 pronto para deploy.</div>
     </div>
 
     <div class="controls">
         <button id="mainBtn" onclick="runExploit()">EXECUTE PTE BYPASS & ESCALATE ROOT</button>
     </div>
 
-    <!-- ... (mesmo CSS anterior) ... -->
-<script>
-    const consoleEl = document.getElementById('console');
-    const btn = document.getElementById('mainBtn');
+    <script>
+        const consoleEl = document.getElementById('console');
+        const btn = document.getElementById('mainBtn');
 
-    function log(msg, type = 'info') {
-        const div = document.createElement('div');
-        div.className = `line ${type}`;
-        div.innerHTML = `> ${msg}`;
-        consoleEl.appendChild(div);
-        consoleEl.scrollTop = consoleEl.scrollHeight;
-    }
-
-    // Função de tratamento atualizada para receber o objeto direto
-    function processResult(res) {
-        if (res && (res.status === "OK" || res.status === "SUCCESS")) {
-            log(`KASLR BYPASS: Slide em ${res.slide}`, "success");
-            log(`PPL BYPASS: PTE writable confirmada.`, "success");
-            log(`ROOT ESCALATION: UID 0 (ROOT CONFIRMED)`, "success");
-            log(`SPAWN: SSHD disparado (PID: ${res.pid})`, "info");
-            log("CONEXÃO: ssh root@localhost -p 2222", "success");
-        } else {
-            log(`FALHA NO EXPLOIT: ${res ? res.info : "Erro de comunicação"}`, "error");
+        function log(msg, type = 'info') {
+            const div = document.createElement('div');
+            div.className = `line ${type}`;
+            div.innerHTML = `> ${msg}`;
+            consoleEl.appendChild(div);
+            consoleEl.scrollTop = consoleEl.scrollHeight;
         }
-        btn.disabled = false;
-        btn.innerText = "EXECUTE PTE BYPASS & ESCALATE ROOT";
-    }
 
-    async function runExploit() {
-        btn.disabled = true;
-        btn.innerText = "EXECUTANDO EXPLOIT..."; 
-        log("Varrendo window.webkit.messageHandlers...", "warn");
+        function processResult(res) {
+            if (res && res.status === "SUCCESS") {
+                log(`KASLR BYPASS: Slide em ${res.slide}`, "success");
+                log(`PPL BYPASS: PTE writable confirmada.`, "success");
 
-        // Usa o atalho window.A13_LAB injetado pelo ViewController
-        const bridge = window.A13_LAB;
+                // Validação de ROOT baseada no UID real retornado pelo C
+                if (res.uid === 0) {
+                    log(`ROOT ESCALATION: UID 0 (ROOT CONFIRMED)`, "success");
+                } else {
+                    log(`ROOT ESCALATION: FALHOU (UID: ${res.uid})`, "error");
+                }
 
-        if (bridge && bridge.postMessage) {
-            log("Ponte detectada! Disparando trigger nativo...", "success");
-            log("Aguardando resposta do Kernel (2-5 segundos)...", "info");
-
-            try {
-                // AQUI ESTÁ A MUDANÇA: O await impede o travamento da UI 
-                // e espera o replyHandler do Objective-C
-                const response = await bridge.postMessage({ action: "pte_patch" });
-                
-                // Processa a resposta que veio direto do replyHandler
-                processResult(response);
-                
-            } catch (err) {
-                log(`ERRO NA EXECUÇÃO: ${err}`, "error");
-                btn.disabled = false;
-                btn.innerText = "TENTAR NOVAMENTE";
+                // Validação de SPAWN do SSHD
+                if (res.pid > 0) {
+                    log(`SPAWN: SSHD disparado (PID: ${res.pid})`, "success");
+                    log(`CONEXÃO: ssh root@localhost -p 2222`, "success");
+                } else {
+                    log(`SPAWN: FALHA NO SSHD (${res.info})`, "error");
+                    log(`Dica: Verifique a assinatura LDID no GitHub Actions.`, "warn");
+                }
+            } else {
+                log(`FALHA NO EXPLOIT: ${res ? res.info : "Erro de comunicação"}`, "error");
             }
-        } else {
-            log("ERRO: Handler A13_LAB não encontrado.", "error");
             btn.disabled = false;
+            btn.innerText = "RE-EXECUTE PTE BYPASS";
         }
-    }
 
-    window.onload = () => {
-        if(window.A13_LAB) log("HOST NATIVO CONECTADO.", "success");
-        else log("Aguardando sinal do Native Host...", "info");
-    };
-</script>
+        async function runExploit() {
+            btn.disabled = true;
+            btn.innerText = "EXPLORANDO KERNEL..."; 
+            log("Disparando trigger nativo via A13_LAB...", "warn");
+            log("Aguardando resposta do Host (KASLR Search)...", "info");
+
+            const bridge = window.A13_LAB;
+
+            if (bridge && bridge.postMessage) {
+                try {
+                    // A espera assíncrona garante que a UI não congele
+                    const response = await bridge.postMessage({ action: "pte_patch" });
+                    processResult(response);
+                } catch (err) {
+                    log(`ERRO NA PONTE: ${err}`, "error");
+                    btn.disabled = false;
+                    btn.innerText = "TENTAR NOVAMENTE";
+                }
+            } else {
+                log("ERRO: Handler nativo não detectado.", "error");
+                btn.disabled = false;
+            }
+        }
+
+        window.onload = () => {
+            if(window.A13_LAB) log("HOST NATIVO CONECTADO.", "success");
+            else log("Aguardando sinal do ViewController...", "warn");
+        };
+    </script>
 </body>
 </html>
