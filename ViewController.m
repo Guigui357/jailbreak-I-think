@@ -7,12 +7,10 @@
 #import "KernelDriver.h"
 
 @interface ViewController () <WKNavigationDelegate>
+// Removidas as propriedades duplicadas que já estão no .h
 @property (nonatomic, strong) KernelDriver *kernelDriver;
 @property (nonatomic, strong) UIButton *sendButton;
 @property (nonatomic, strong) UIButton *exploitButton;
-@property (nonatomic, strong) UITextView *consoleView;
-@property (nonatomic, strong) UITextField *commandField;
-@property (nonatomic, strong) WKWebView *webView;
 @end
 
 @implementation ViewController
@@ -79,7 +77,7 @@
         [self.consoleView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:10],
         [self.consoleView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:15],
         [self.consoleView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-15],
-        [self.consoleView.heightAnchor constraintEqualToConstant:300], // Menor para caber tudo
+        [self.consoleView.heightAnchor constraintEqualToConstant:300],
         
         [self.commandField.topAnchor constraintEqualToAnchor:self.consoleView.bottomAnchor constant:15],
         [self.commandField.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:15],
@@ -106,7 +104,6 @@
         NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
         [formatter setDateFormat:@"HH:mm:ss"];
         NSString *time = [formatter stringFromDate:[NSDate date]];
-        
         self.consoleView.text = [NSString stringWithFormat:@"[%@] %@\n%@", time, message, self.consoleView.text];
     });
 }
@@ -125,14 +122,11 @@
 
 - (void)runExploit {
     [self log:@"[!] Iniciando Catalyst-26..."];
-    [self log:@"[!] KASLR Bypass via Leak Port..."];
-    
     [self.kernelDriver executeExploitWithCallback:^(BOOL success, NSString *message) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (success) {
                 [self log:@"✅ ROOT ESCALATION: SUCCESS"];
                 [self log:[NSString stringWithFormat:@"UID: %llu", [self.kernelDriver getCurrentUID]]];
-                [self log:message];
             } else {
                 [self log:[NSString stringWithFormat:@"❌ FALHA: %@", message]];
             }
