@@ -93,6 +93,9 @@
         [self.exploitButton.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:15],
         [self.exploitButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-15],
         [self.exploitButton.heightAnchor constraintEqualToConstant:60]
+        [[NSNotificationCenter defaultCenter] addObserverForName:@"KernelLogNotification" object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+            [self log:(NSString *)note.object];
+    }];
     ]];
     
     [self log:@"Catalyst-26: Bridge Ready"];
