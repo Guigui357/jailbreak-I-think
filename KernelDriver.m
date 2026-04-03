@@ -34,6 +34,10 @@ extern kern_return_t mach_vm_deallocate(
     mach_vm_size_t size
 );
 
+@implementation KernelDriver {
+    uint64_t _kernel_slide;
+}
+
 // --- 1. PRIMITIVA: KREAD64 (Via Mach VM Overwrite) ---
 - (uint64_t)kread64:(uint64_t)addr {
     uint64_t val = 0;
