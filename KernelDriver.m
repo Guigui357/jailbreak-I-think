@@ -3,9 +3,36 @@
 #import <spawn.h>
 #import <sys/stat.h>
 
-@implementation KernelDriver {
-    uint64_t _kernel_slide;
-}
+// --- DECLARAÇÕES DE APIs PRIVADAS (RESOLVE OS ERROS DE COMPILAÇÃO) ---
+typedef mach_vm_address_t mach_vm_offset_t;
+
+extern kern_return_t mach_vm_read_overwrite(
+    vm_map_t target_task,
+    mach_vm_address_t address,
+    mach_vm_size_t size,
+    mach_vm_address_t data,
+    mach_vm_size_t *outsize
+);
+
+extern kern_return_t mach_vm_map(
+    vm_map_t target_task,
+    mach_vm_address_t *address,
+    mach_vm_size_t size,
+    mach_vm_address_t mask,
+    int flags,
+    mem_entry_name_port_t object,
+    memory_object_offset_t offset,
+    boolean_t copy,
+    vm_prot_t cur_protection,
+    vm_prot_t max_protection,
+    vm_inherit_t inheritance
+);
+
+extern kern_return_t mach_vm_deallocate(
+    vm_map_t target_task,
+    mach_vm_address_t address,
+    mach_vm_size_t size
+);
 
 // --- 1. PRIMITIVA: KREAD64 (Via Mach VM Overwrite) ---
 - (uint64_t)kread64:(uint64_t)addr {
