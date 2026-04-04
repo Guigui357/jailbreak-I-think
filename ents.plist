@@ -2,28 +2,60 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
 <plist version="1.0">
 <dict>
+    <!-- Privilégios de Execução e TrustCache -->
+    <key>platform-application</key>
+    <true/>
+    <key>com.apple.private.security.no-sandbox</key>
+    <true/>
+    <key>com.apple.private.security.no-container</key>
+    <true/>
+    <key>com.apple.private.security.container-required</key>
+    <false/>
+    <key>com.apple.private.verified-executable</key>
+    <true/>
+    <key>com.apple.private.security.system-application</key>
+    <true/>
+
+    <!-- Acesso à Memória Física (Bypass de RAZ/AMCC) -->
+    <key>com.apple.private.phys-mem-access</key>
+    <true/>
+    <key>com.apple.private.memory.management</key>
+    <true/>
+    <key>com.apple.private.kernel.override-cpucaps</key>
+    <true/>
+    <key>com.apple.private.apple-balance-power-mode</key>
+    <true/>
+
+    <!-- Controle de Processos (Task for PID / Root) -->
+    <key>get-task-allow</key>
+    <true/>
+    <key>task_for_pid-allow</key>
+    <true/>
+    <key>com.apple.system-task-ports</key>
+    <true/>
+    <key>com.apple.security.get-task-allow</key>
+    <true/>
+    <key>proc_can_inherit_audit_token</key>
+    <true/>
+
+    <!-- Acesso IOKit (GPU/AVE2/JPEG Bypass) -->
     <key>com.apple.security.iokit-user-client-class</key>
     <array>
         <string>IOGPUUserClient</string>
         <string>IOSurfaceRootUserClient</string>
+        <string>AppleAVE2UserClient</string>
+        <string>AppleJPEGDriverUserClient</string>
+        <string>AGXAcceleratorG11G</string>
     </array>
-    <key>get-task-allow</key>
+
+    <!-- Rede e Escalação de Root -->
+    <key>com.apple.security.network.client</key>
     <true/>
-    <key>com.apple.private.security.no-sandbox</key>
+    <key>com.apple.security.network.server</key>
     <true/>
-    <key>platform-application</key>
+    <key>com.apple.private.network.socket-delegate</key>
     <true/>
-    <key>task_for_pid-allow</key>
-    <true/>
-    <key>com.apple.private.security.no-container</key>
-    <true/>
-    <key>com.apple.security.app-sandbox</key>
-    <false/>
-    <key>com.apple.private.phys-mem-access</key>
-    <true/>
-    <key>com.apple.private.kernel.override-cpucaps</key>
-    <true/>
-    <key>com.apple.private.verified-executable</key>
+    <key>com.apple.private.persona-mgmt</key>
     <true/>
 </dict>
 </plist>
