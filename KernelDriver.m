@@ -18,23 +18,24 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
 
 // Primitivas Obrigatórias
 - (uint64_t)kread64:(uint64_t)addr {
-    if (addr < 0xFFFFFFF000000000ULL || (addr % 8) != 0) return 0;
+    // Verificação de sanidade para endereços de Kernel
+    if (addr < 0xFFFFFFF000000000ULL) return 0;
+    
     uint64_t val = 0;
-
-    // Tentativa via IOKit (Bypass de Sandbox comum no A13)
-    io_service_t service = IOServiceGetMatchingService(MACH_PORT_NULL, IOServiceMatching("IOSurfaceRoot"));
-    if (service != IO_OBJECT_NULL) {
-        // Se conseguirmos abrir o serviço, usamos a vulnerabilidade de 'copyin'
-        int fds[2];
-        if (pipe(fds) == 0) {
-            if (write(fds[1], (void *)addr, 8) == 8) {
-                read(fds[0], &val, 8);
-            }
-            close(fds[0]); close(fds[1]);
+    int fds[2];
+    if (pipe(fds) == 0) {
+        // O kernel precisa ter uma vulnerabilidade que permita o pipe 
+        // aceitar um ponteiro de kernel como buffer de escrita.
+        // Se a sandbox bloquear o 'write' em endereços de kernel, val continuará 0.
+        ssize_t w = write(fds[1], (void *)addr, 8); 
+        if (w == 8) {
+            read(fds[0], &val, 8);
         }
+        close(fds[0]); close(fds[1]);
     }
     return val;
 }
+
 
 - (uint32_t)kread32:(uint64_t)a { return (uint32_t)[self kread64:a]; }
 - (void)kwrite64:(uint64_t)a value:(uint64_t)v { [self physWrite:a val:v]; }
