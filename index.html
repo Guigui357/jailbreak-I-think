@@ -46,60 +46,61 @@
             consoleEl.scrollTop = consoleEl.scrollHeight;
         }
 
-        function processResult(res) {
-            if (res && res.status === "SUCCESS") {
-                log(`KASLR BYPASS: Slide em ${res.slide}`, "success");
-                log(`PPL BYPASS: PTE writable confirmada.`, "success");
-
-                // Validação de ROOT baseada no UID real retornado pelo C
-                if (res.uid === 0) {
-                    log(`ROOT ESCALATION: UID 0 (ROOT CONFIRMED)`, "success");
-                } else {
-                    log(`ROOT ESCALATION: FALHOU (UID: ${res.uid})`, "error");
-                }
-
-                // Validação de SPAWN do SSHD
-                if (res.pid > 0) {
-                    log(`SPAWN: SSHD disparado (PID: ${res.pid})`, "success");
-                    log(`CONEXÃO: ssh root@localhost -p 2222`, "success");
-                } else {
-                    log(`SPAWN: FALHA NO SSHD (${res.info})`, "error");
-                    log(`Dica: Verifique a assinatura LDID no GitHub Actions.`, "warn");
-                }
-            } else {
-                log(`FALHA NO EXPLOIT: ${res ? res.info : "Erro de comunicação"}`, "error");
-            }
+        // --- RESPOSTA DO HOST NATIVO ---
+        window.receiveKernelResult = function(data) {
             btn.disabled = false;
             btn.innerText = "RE-EXECUTE PTE BYPASS";
-        }
+            
+            try {
+                const res = typeof data === 'string' ? JSON.parse(data) : data;
+                
+                if (res.status === "SUCCESS") {
+                    log(`KASLR BYPASS: Slide em ${res.slide}`, "success");
+                    log(`PPL BYPASS: PTE writable confirmada.`, "success");
 
-        async function runExploit() {
+                    if (res.uid === 0) {
+                        log(`ROOT ESCALATION: UID 0 (ROOT CONFIRMED)`, "success");
+                    } else {
+                        log(`ROOT ESCALATION: FALHOU (UID: ${res.uid})`, "error");
+                    }
+
+                    if (res.pid > 0) {
+                        log(`SPAWN: SSHD disparado (PID: ${res.pid})`, "success");
+                        log(`CONEXÃO: ssh root@localhost -p 2222`, "success");
+                    } else {
+                        log(`SPAWN: FALHA NO SSHD (${res.info})`, "error");
+                    }
+                } else {
+                    log(`FALHA NO EXPLOIT: ${res.info}`, "error");
+                    log("Dica: Verifique se o app foi assinado via TrollStore.", "warn");
+                }
+            } catch (e) {
+                log("ERRO AO PROCESSAR RESULTADO: " + e, "error");
+            }
+        };
+
+        function runExploit() {
             btn.disabled = true;
             btn.innerText = "EXPLORANDO KERNEL..."; 
             log("Disparando trigger nativo via A13_LAB...", "warn");
             log("Aguardando resposta do Host (KASLR Search)...", "info");
 
-            const bridge = window.A13_LAB;
-
-            if (bridge && bridge.postMessage) {
-                try {
-                    // A espera assíncrona garante que a UI não congele
-                    const response = await bridge.postMessage({ action: "pte_patch" });
-                    processResult(response);
-                } catch (err) {
-                    log(`ERRO NA PONTE: ${err}`, "error");
-                    btn.disabled = false;
-                    btn.innerText = "TENTAR NOVAMENTE";
-                }
+            // No iOS real, a ponte correta é window.webkit.messageHandlers
+            if (window.webkit && window.webkit.messageHandlers.A13_LAB) {
+                window.webkit.messageHandlers.A13_LAB.postMessage({ action: "pte_patch" });
             } else {
-                log("ERRO: Handler nativo não detectado.", "error");
+                log("ERRO: Handler nativo (WebKit) não detectado.", "error");
                 btn.disabled = false;
+                btn.innerText = "RE-TENTAR";
             }
         }
 
         window.onload = () => {
-            if(window.A13_LAB) log("HOST NATIVO CONECTADO.", "success");
-            else log("Aguardando sinal do ViewController...", "warn");
+            if(window.webkit && window.webkit.messageHandlers.A13_LAB) {
+                log("HOST NATIVO CONECTADO.", "success");
+            } else {
+                log("ERRO: Ponte WebKit ausente. Execute dentro do App nativo.", "error");
+            }
         };
     </script>
 </body>
