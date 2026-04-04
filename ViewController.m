@@ -2,6 +2,10 @@
 #import <WebKit/WebKit.h>
 #import "KernelDriver.h"
 
+// Adicionando conformidade ao protocolo para aceitar o 'self' como handler
+@interface ViewController () <WKScriptMessageHandler>
+@end
+
 @implementation ViewController {
     WKWebView *_webView;
     KernelDriver *_driver;
@@ -9,11 +13,8 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    
-    // Inicia o motor de kernel
     _driver = [[KernelDriver alloc] init];
 
-    // Configura a ponte A13_LAB
     WKUserContentController *ucc = [[WKUserContentController alloc] init];
     [ucc addScriptMessageHandler:self name:@"A13_LAB"];
 
@@ -23,29 +24,26 @@
     _webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:cfg];
     [self.view addSubview:_webView];
 
-    // Carrega o seu HTML do Jailbreak
     NSURL *url = [[NSBundle mainBundle] URLForResource:@"index" withExtension:@"html"];
-    [_webView loadFileURL:url allowingReadAccessToURL:url];
+    if (url) [_webView loadFileURL:url allowingReadAccessToURL:url];
 }
 
-// --- RECEBENDO COMANDOS DO HTML ---
-- (void)userContentController:(WKUserContentController *)ucc didReceiveScriptMessage:(WKScriptMessage *)msg {
-    NSDictionary *data = msg.body;
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+    NSDictionary *data = message.body;
     NSString *action = data[@"action"];
-    
-    // Ação 1: Patch de Memória (AMFI/PAC)
+
     if ([action isEqualToString:@"kwrite"]) {
-        uint64_t addr = [data[@"addr"] longLongValue];
-        uint64_t val = [data[@"val"] longLongValue];
+        uint64_t addr = (uint64_t)[data[@"addr"] longLongValue];
+        uint64_t val = (uint64_t)[data[@"val"] longLongValue];
         [_driver kwrite64:addr value:val];
-    }
-    
-    // Ação 2: Comandos de Shell (Remount, MKDIR, etc)
-    if ([action isEqualToString:@"shell"]) {
+    } else if ([action isEqualToString:@"shell"]) {
         [_driver executeShell:data[@"payload"]];
-        // Retorna sucesso para o console do HTML
-        [_webView evaluateJavaScript:@"log('Shell: Comando Executado.', 'success')" completionHandler:nil];
     }
 }
+
+// Implementando os métodos que o seu Header (.h) exigia para não dar warning
+- (void)log:(NSString *)message { NSLog(@"%@", message); }
+- (void)executeCommand { [self log:@"Comando executado"]; }
+- (void)runExploit { [self log:@"Exploit iniciado"]; }
 
 @end
