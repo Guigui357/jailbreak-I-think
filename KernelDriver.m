@@ -28,29 +28,42 @@ extern char **environ;
 - (NSString *)executeShell:(NSString *)cmd {
     pid_t pid;
     int pipefd[2];
-    pipe(pipefd);
+    pipe(pipefd); // Cria o pipe [0] leitura, [1] escrita
 
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
+    
+    // Redireciona a saída padrão e de erro para o nosso pipe
     posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDERR_FILENO);
     posix_spawn_file_actions_addclose(&actions, pipefd[0]);
 
     const char *args[] = {"sh", "-c", [cmd UTF8String], NULL};
-    setuid(0);
+    extern char **environ;
 
+    setuid(0); // Força Root
     if (posix_spawn(&pid, "/bin/sh", &actions, NULL, (char* const*)args, environ) == 0) {
-        close(pipefd[1]);
-        waitpid(pid, NULL, 0);
-        char buffer[1024];
-        ssize_t n = read(pipefd[0], buffer, sizeof(buffer)-1);
-        close(pipefd[0]);
-        if (n > 0) {
+        close(pipefd[1]); // Fecha a ponta de escrita no pai
+        
+        NSMutableString *output = [NSMutableString string];
+        char buffer[256];
+        ssize_t n;
+        
+        // Loop de leitura real até o fim da saída
+        while ((n = read(pipefd[0], buffer, sizeof(buffer) - 1)) > 0) {
             buffer[n] = '\0';
-            return [NSString stringWithUTF8String:buffer];
+            [output appendString:[NSString stringWithUTF8String:buffer]];
         }
+        
+        waitpid(pid, NULL, 0);
+        close(pipefd[0]);
+        posix_spawn_file_actions_destroy(&actions);
+        
+        return output.length ? output : @"[Comando sem saída]";
     }
-    return @"[OK]";
+    return @"[!] Erro no Spawn";
 }
+
 
 - (NSString *)prepareSSHDEnvironment {
     NSString *bundlePath = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
