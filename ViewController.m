@@ -101,10 +101,21 @@
 }
 
 - (void)runExploit {
+    [self log:@"[!] Iniciando Catalyst-26..."];
     [self.kernelDriver executeExploitWithCallback:^(BOOL success, NSString *msg) {
-        [self log:success ? @"✅ ROOT SUCCESS" : [@"❌ FALHA: " stringByAppendingString:msg]];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (success) {
+                [self log:@"✅ ROOT STATUS: SUCCESS"];
+                [self log:[NSString stringWithFormat:@"[i] UID Atual: %llu", (unsigned long long)[self.kernelDriver getCurrentUID]]];
+                self.exploitButton.backgroundColor = [UIColor blueColor];
+                [self.exploitButton setTitle:@"🔓 KERNEL UNLOCKED" forState:UIControlStateNormal];
+            } else {
+                [self log:[@"❌ FALHA CRÍTICA: " stringByAppendingString:msg]];
+            }
+        });
     }];
 }
+
 
 - (void)log:(NSString *)m {
     dispatch_async(dispatch_get_main_queue(), ^{
