@@ -1,125 +1,51 @@
 #import "ViewController.h"
-#import "KernelDriver.h"
 #import <WebKit/WebKit.h>
+#import "KernelDriver.h"
 
-@interface ViewController () <WKNavigationDelegate, WKScriptMessageHandler>
-// Esta linha resolve os erros de "property not found"
-@property (nonatomic, strong) KernelDriver *kernelDriver; 
-@property (nonatomic, strong) UIButton *sendButton;
-@property (nonatomic, strong) UIButton *exploitButton;
-@end
-
-@implementation ViewController
+@implementation ViewController {
+    WKWebView *_webView;
+    KernelDriver *_driver;
+}
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = [UIColor blackColor];
     
-    // Setup WebView (Ponte nativa)
-    WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
-    [config.userContentController addScriptMessageHandler:self name:@"A13_LAB"];
-    
-    // self.webView já vem do seu .h
-    self.webView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:config];
-    [self.view addSubview:self.webView];
-    
-    // Inicializa o Driver
-    self.kernelDriver = [[KernelDriver alloc] initWithWebView:self.webView];
-    
-    // UI Setup (Usando propriedades do seu .h)
-    self.consoleView = [[UITextView alloc] init];
-    self.consoleView.backgroundColor = [UIColor colorWithRed:0.02 green:0.02 blue:0.05 alpha:1.0];
-    self.consoleView.textColor = [UIColor colorWithRed:0.0 green:1.0 blue:0.41 alpha:1.0];
-    self.consoleView.font = [UIFont fontWithName:@"Courier-Bold" size:11];
-    self.consoleView.editable = NO;
-    self.consoleView.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:self.consoleView];
-    
-    self.commandField = [[UITextField alloc] init];
-    self.commandField.backgroundColor = [UIColor colorWithRed:0.1 green:0.1 blue:0.1 alpha:1.0];
-    self.commandField.textColor = [UIColor whiteColor];
-    self.commandField.placeholder = @" root@iphone:~#";
-    self.commandField.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:self.commandField];
-    
-    self.sendButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.sendButton setTitle:@"RUN" forState:UIControlStateNormal];
-    self.sendButton.backgroundColor = [UIColor colorWithRed:0.0 green:1.0 blue:0.41 alpha:1.0];
-    [self.sendButton setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
-    self.sendButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.sendButton addTarget:self action:@selector(executeCommand) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:self.sendButton];
-    
-    self.exploitButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.exploitButton setTitle:@"🚀 EXECUTE CATALYST-26" forState:UIControlStateNormal];
-    self.exploitButton.backgroundColor = [UIColor orangeColor];
-    [self.exploitButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    self.exploitButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.exploitButton addTarget:self action:@selector(runExploit) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:self.exploitButton];
-    
-    [self setupConstraints];
+    // Inicia o motor de kernel
+    _driver = [[KernelDriver alloc] init];
 
-    [[NSNotificationCenter defaultCenter] addObserverForName:@"KernelLogNotification" object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
-        [self log:(NSString *)n.object];
-    }];
+    // Configura a ponte A13_LAB
+    WKUserContentController *ucc = [[WKUserContentController alloc] init];
+    [ucc addScriptMessageHandler:self name:@"A13_LAB"];
+
+    WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
+    cfg.userContentController = ucc;
+
+    _webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:cfg];
+    [self.view addSubview:_webView];
+
+    // Carrega o seu HTML do Jailbreak
+    NSURL *url = [[NSBundle mainBundle] URLForResource:@"index" withExtension:@"html"];
+    [_webView loadFileURL:url allowingReadAccessToURL:url];
 }
 
-- (void)setupConstraints {
-    [NSLayoutConstraint activateConstraints:@[
-        [self.consoleView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:10],
-        [self.consoleView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:15],
-        [self.consoleView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-15],
-        [self.consoleView.heightAnchor constraintEqualToConstant:300],
-        [self.commandField.topAnchor constraintEqualToAnchor:self.consoleView.bottomAnchor constant:15],
-        [self.commandField.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:15],
-        [self.commandField.trailingAnchor constraintEqualToAnchor:self.sendButton.leadingAnchor constant:-10],
-        [self.commandField.heightAnchor constraintEqualToConstant:45],
-        [self.sendButton.centerYAnchor constraintEqualToAnchor:self.commandField.centerYAnchor],
-        [self.sendButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-15],
-        [self.sendButton.widthAnchor constraintEqualToConstant:60],
-        [self.sendButton.heightAnchor constraintEqualToConstant:45],
-        [self.exploitButton.topAnchor constraintEqualToAnchor:self.commandField.bottomAnchor constant:20],
-        [self.exploitButton.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:15],
-        [self.exploitButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-15],
-        [self.exploitButton.heightAnchor constraintEqualToConstant:55]
-    ]];
+// --- RECEBENDO COMANDOS DO HTML ---
+- (void)userContentController:(WKUserContentController *)ucc didReceiveScriptMessage:(WKScriptMessage *)msg {
+    NSDictionary *data = msg.body;
+    NSString *action = data[@"action"];
+    
+    // Ação 1: Patch de Memória (AMFI/PAC)
+    if ([action isEqualToString:@"kwrite"]) {
+        uint64_t addr = [data[@"addr"] longLongValue];
+        uint64_t val = [data[@"val"] longLongValue];
+        [_driver kwrite64:addr value:val];
+    }
+    
+    // Ação 2: Comandos de Shell (Remount, MKDIR, etc)
+    if ([action isEqualToString:@"shell"]) {
+        [_driver executeShell:data[@"payload"]];
+        // Retorna sucesso para o console do HTML
+        [_webView evaluateJavaScript:@"log('Shell: Comando Executado.', 'success')" completionHandler:nil];
+    }
 }
 
-- (void)userContentController:(WKUserContentController *)u didReceiveScriptMessage:(WKScriptMessage *)m {
-    [self.kernelDriver userContentController:u didReceiveScriptMessage:m];
-}
-
-- (void)executeCommand {
-    NSString *cmd = self.commandField.text;
-    if (!cmd.length) return;
-    [self log:[NSString stringWithFormat:@"# %@", cmd]];
-    [self.kernelDriver executeCommand:cmd withCallback:^(NSString *output) {
-        [self log:output];
-    }];
-    self.commandField.text = @"";
-}
-
-- (void)runExploit {
-    [self log:@"[!] Iniciando Catalyst-26..."];
-    [self.kernelDriver executeExploitWithCallback:^(BOOL success, NSString *msg) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (success) {
-                [self log:@"✅ ROOT STATUS: SUCCESS"];
-                [self log:[NSString stringWithFormat:@"[i] UID Atual: %llu", (unsigned long long)[self.kernelDriver getCurrentUID]]];
-                self.exploitButton.backgroundColor = [UIColor blueColor];
-                [self.exploitButton setTitle:@"🔓 KERNEL UNLOCKED" forState:UIControlStateNormal];
-            } else {
-                [self log:[@"❌ FALHA CRÍTICA: " stringByAppendingString:msg]];
-            }
-        });
-    }];
-}
-
-
-- (void)log:(NSString *)m {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.consoleView.text = [NSString stringWithFormat:@"%@\n%@", m, self.consoleView.text];
-    });
-}
 @end
