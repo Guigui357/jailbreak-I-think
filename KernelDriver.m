@@ -1,32 +1,69 @@
 #import "KernelDriver.h"
-#import <mach/mach.h>
 #import <spawn.h>
 #import <sys/wait.h>
 #import <unistd.h>
 
-// Definições necessárias para o Linker do iOS 18.5+
-extern kern_return_t mach_vm_write(vm_map_t, mach_vm_address_t, vm_offset_t, mach_msg_type_number_t);
 extern char **environ;
 
 @implementation KernelDriver {
     mach_port_t _tfp0;
-    uint64_t _kbase;
 }
 
 - (instancetype)init {
     if (self = [super init]) {
-        _tfp0 = MACH_PORT_NULL;
-        // Obtém a porta de tarefa do kernel (requer exploit anterior)
         task_for_pid(mach_task_self(), 0, &_tfp0);
-        _kbase = 0xfffffff007004000ULL; // Base padrão A13
     }
     return self;
 }
 
-// 1. Primitiva de Escrita Física (Bypass PPL/AMCC)
-- (void)kwrite64:(uint64_t)addr value:(uint64_t)val {
-    if (mach_vm_write(_tfp0, addr, (vm_offset_t)&val, 8) == KERN_SUCCESS) {
-        NSLog(@"[Kernel] KWRITE OK: 0x%llx", addr);
+// 1. Mover o binário para fora do Bundle (Bypass Sandbox)
+- (NSString *)prepareSSHDEnvironment {
+    NSString *bundlePath = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
+    if (!bundlePath) return @"[-] Erro: sshd não encontrado no Bundle.";
+
+    // Caminho no RootFS (Liberado pelo seu Remount RW)
+    NSString *targetPath = @"/Library/Jailbreak/sshd";
+    
+    // Comandos Root para mover e dar permissão
+    [self executeShell:[NSString stringWithFormat:@"cp %@ %@", bundlePath, targetPath]];
+    [self executeShell:[NSString stringWithFormat:@"chmod 755 %@", targetPath]];
+    [self executeShell:@"mkdir -p /Library/Jailbreak/etc"];
+    
+    return targetPath;
+}
+
+// 2. Inicializador do SSHD (Dropbear) - Versão Estável
+- (NSString *)executeSSHD {
+    // Passo A: Migra o binário para o RootFS
+    NSString *realSshdPath = [self prepareSSHDEnvironment];
+    if ([realSshdPath hasPrefix:@"[-]"]) return realSshdPath;
+
+    pid_t pid;
+    // Argumentos Ajustados:
+    // -F: Não rodar em background (ajuda o spawn a não dar erro 1)
+    // -p 2222: Porta customizada
+    // -P /tmp/dropbear.pid: Local de escrita do PID
+    // -r: Chaves de host
+    const char *args[] = {
+        [realSshdPath UTF8String], 
+        "-p", "2222", 
+        "-P", "/tmp/dropbear.pid",
+        "-r", "/Library/Jailbreak/etc/dropbear_rsa_host_key",
+        "-r", "/Library/Jailbreak/etc/dropbear_ecdsa_host_key",
+        "-E", "-R", NULL
+    };
+
+    setuid(0);
+    setgid(0);
+
+    // O Pulo do Gato: posix_spawn direto do RootFS
+    int status = posix_spawn(&pid, [realSshdPath UTF8String], NULL, NULL, (char* const*)args, environ);
+
+    if (status == 0) {
+        // Desacopla o processo para ele não morrer quando o app fechar
+        return [NSString stringWithFormat:@"[+] SSHD ONLINE! PID: %d (Porta 2222)", pid];
+    } else {
+        return [NSString stringWithFormat:@"[-] Erro %d: %s. Tente 'Remount RW' primeiro.", status, strerror(status)];
     }
 }
 
@@ -74,28 +111,3 @@ extern char **environ;
     
     return @"[+] Host Keys geradas em /Library/Jailbreak/etc/";
 }
-
-// 4. Inicializador do Daemon SSHD (Dropbear)
-- (NSString *)executeSSHD {
-    NSString *sshdPath = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
-    if (!sshdPath) return @"[-] Erro: sshd não está no Bundle.";
-
-    pid_t pid;
-    // -p 2222: Porta alta | -R: Gerar chaves se faltar | -E: Log stderr | -r: Caminho da chave
-    const char *args[] = {
-        [sshdPath UTF8String], "-p", "2222", 
-        "-r", "/Library/Jailbreak/etc/dropbear_rsa_host_key",
-        "-r", "/Library/Jailbreak/etc/dropbear_ecdsa_host_key",
-        "-E", "-R", NULL
-    };
-
-    setuid(0);
-    int status = posix_spawn(&pid, [sshdPath UTF8String], NULL, NULL, (char* const*)args, environ);
-
-    if (status == 0) {
-        return [NSString stringWithFormat:@"[+] SSHD Rodando! PID: %d (Porta 2222)", pid];
-    }
-    return [NSString stringWithFormat:@"[-] Falha ao iniciar SSHD: %d", status];
-}
-
-@end
