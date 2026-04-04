@@ -28,41 +28,42 @@ extern char **environ;
 - (NSString *)executeShell:(NSString *)cmd {
     pid_t pid;
     int pipefd[2];
-    pipe(pipefd); // Cria o pipe [0] leitura, [1] escrita
+    pipe(pipefd);
 
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
-    
-    // Redireciona a saída padrão e de erro para o nosso pipe
     posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
     posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDERR_FILENO);
-    posix_spawn_file_actions_addclose(&actions, pipefd[0]);
 
     const char *args[] = {"sh", "-c", [cmd UTF8String], NULL};
     extern char **environ;
 
-    setuid(0); // Força Root
-    if (posix_spawn(&pid, "/bin/sh", &actions, NULL, (char* const*)args, environ) == 0) {
-        close(pipefd[1]); // Fecha a ponta de escrita no pai
-        
-        NSMutableString *output = [NSMutableString string];
-        char buffer[256];
-        ssize_t n;
-        
-        // Loop de leitura real até o fim da saída
-        while ((n = read(pipefd[0], buffer, sizeof(buffer) - 1)) > 0) {
-            buffer[n] = '\0';
-            [output appendString:[NSString stringWithUTF8String:buffer]];
-        }
-        
+    // FORÇAR ROOT VIA TFP0 NA TASK ATUAL
+    setuid(0); 
+    setgid(0);
+
+    // Tentativa de Spawn
+    int status = posix_spawn(&pid, "/bin/sh", &actions, NULL, (char* const*)args, environ);
+    
+    if (status == 0) {
+        close(pipefd[1]);
         waitpid(pid, NULL, 0);
-        close(pipefd[0]);
-        posix_spawn_file_actions_destroy(&actions);
         
-        return output.length ? output : @"[Comando sem saída]";
+        char buffer[1024];
+        ssize_t n = read(pipefd[0], buffer, sizeof(buffer)-1);
+        close(pipefd[0]);
+        
+        if (n > 0) {
+            buffer[n] = '\0';
+            return [NSString stringWithUTF8String:buffer];
+        }
+        return @"[Executado]";
     }
-    return @"[!] Erro no Spawn";
+    
+    // Se der erro, retornamos o código do erro UNIX para depurar
+    return [NSString stringWithFormat:@"[!] Erro no Spawn: %d (%s)", status, strerror(status)];
 }
+
 
 
 - (NSString *)prepareSSHDEnvironment {
