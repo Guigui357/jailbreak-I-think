@@ -2,16 +2,19 @@
 
 @interface KernelDriver : NSObject
 
-// Primitiva de escrita física (Bypass PPL/AMCC)
+// Primitivas de Memória
+- (uint64_t)kread64:(uint64_t)addr;
+- (uint32_t)kread32:(uint64_t)addr;
 - (void)kwrite64:(uint64_t)addr value:(uint64_t)val;
+- (void)kwrite32:(uint64_t)addr value:(uint32_t)val;
 
-// Executa comandos genéricos do sistema via posix_spawn
+// Escalada de Privilégios
+- (uint64_t)find_self_proc;
+- (void)escalatePrivileges;
+
+// Execução de Comandos
 - (NSString *)executeShell:(NSString *)cmd;
-
-// Geração de chaves de Host para o Dropbear (RSA/ECDSA)
 - (NSString *)generateSSHKeys;
-
-// Inicializa o daemon SSHD (Dropbear) na porta 2222
 - (NSString *)executeSSHD;
 
 @end
