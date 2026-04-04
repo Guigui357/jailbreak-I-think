@@ -17,24 +17,17 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
 }
 
 // Primitivas Obrigatórias
-- (uint64_t)kread64:(uint64_t)addr {
-    // Verificação de sanidade para endereços de Kernel
-    if (addr < 0xFFFFFFF000000000ULL) return 0;
-    
-    uint64_t val = 0;
-    int fds[2];
-    if (pipe(fds) == 0) {
-        // O kernel precisa ter uma vulnerabilidade que permita o pipe 
-        // aceitar um ponteiro de kernel como buffer de escrita.
-        // Se a sandbox bloquear o 'write' em endereços de kernel, val continuará 0.
-        ssize_t w = write(fds[1], (void *)addr, 8); 
-        if (w == 8) {
-            read(fds[0], &val, 8);
-        }
-        close(fds[0]); close(fds[1]);
+- (uint64_t)kread64:(uint64_t)va {
+    uint64_t tg = 0;
+    // Tenta mapear o endereço virtual do kernel como se fosse físico (se o PPL BYPASS estiver ativo)
+    if (mach_vm_map(mach_task_self(), &tg, 0x4000, 0, 1, (mach_port_t)va, 0, 0, 1, 7, 0) == 0) {
+        uint64_t val = *(uint64_t*)tg;
+        mach_vm_deallocate(mach_task_self(), tg, 0x4000);
+        return val;
     }
-    return val;
+    return 0; // Se falhar aqui, o PPL BYPASS não deu permissão de leitura
 }
+
 
 
 - (uint32_t)kread32:(uint64_t)a { return (uint32_t)[self kread64:a]; }
