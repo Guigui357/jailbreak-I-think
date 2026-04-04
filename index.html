@@ -13,25 +13,22 @@
         .success { color: #50fa7b; border-left-color: #50fa7b; font-weight: bold; }
         .error { color: #ff5555; border-left-color: #ff5555; background: rgba(255,0,0,0.1); }
         .warn { color: #f1fa8c; border-left-color: #f1fa8c; }
-        .controls { margin-top: 15px; }
-        button { width: 100%; background: #000; color: #00ff41; border: 1px solid #00ff41; padding: 18px; font-weight: bold; border-radius: 4px; font-family: inherit; font-size: 14px; cursor: pointer; transition: all 0.2s; }
-        button:active { background: #00ff41; color: #000; }
-        button:disabled { border-color: #333; color: #333; cursor: wait; opacity: 0.5; }
+        .controls { margin-top: 15px; display: flex; flex-direction: column; gap: 8px; }
+        input { background: #000; color: #00ff41; border: 1px solid #333; padding: 12px; font-family: inherit; border-radius: 4px; }
+        button { background: #000; color: #00ff41; border: 1px solid #00ff41; padding: 15px; font-weight: bold; border-radius: 4px; cursor: pointer; }
+        button:disabled { opacity: 0.5; cursor: wait; }
     </style>
 </head>
 <body>
-
-    <div id="header">
-        <span>[ EXPLOIT: CATALYST-26 ]</span>
-        <span>A13 - IPHONE 11</span>
-    </div>
-
-    <div id="console">
-        <div class="line info">[*] Terminal Catalyst-26 pronto para deploy.</div>
-    </div>
-
+    <div id="header"><span>[ EXPLOIT: CATALYST-26 ]</span><span>A13 - IPHONE 11</span></div>
+    <div id="console"><div class="line info">[*] Terminal Catalyst-26 pronto para deploy.</div></div>
+    
     <div class="controls">
-        <button id="mainBtn" onclick="runExploit()">EXECUTE PTE BYPASS & ESCALATE ROOT</button>
+        <button id="mainBtn" onclick="runExploit()">EXECUTE PTE BYPASS & ROOT</button>
+        <div style="display:flex; gap:5px;">
+            <input type="text" id="cmdInput" placeholder="Comando (ex: id, ls /var/root)" style="flex-grow:1;">
+            <button onclick="sendCmd()">RUN</button>
+        </div>
     </div>
 
     <script>
@@ -46,62 +43,33 @@
             consoleEl.scrollTop = consoleEl.scrollHeight;
         }
 
-        // --- RESPOSTA DO HOST NATIVO ---
-        window.receiveKernelResult = function(data) {
+        window.receiveKernelResult = function(res) {
             btn.disabled = false;
-            btn.innerText = "RE-EXECUTE PTE BYPASS";
-            
-            try {
-                const res = typeof data === 'string' ? JSON.parse(data) : data;
-                
-                if (res.status === "SUCCESS") {
-                    log(`KASLR BYPASS: Slide em ${res.slide}`, "success");
-                    log(`PPL BYPASS: PTE writable confirmada.`, "success");
-
-                    if (res.uid === 0) {
-                        log(`ROOT ESCALATION: UID 0 (ROOT CONFIRMED)`, "success");
-                    } else {
-                        log(`ROOT ESCALATION: FALHOU (UID: ${res.uid})`, "error");
-                    }
-
-                    if (res.pid > 0) {
-                        log(`SPAWN: SSHD disparado (PID: ${res.pid})`, "success");
-                        log(`CONEXÃO: ssh root@localhost -p 2222`, "success");
-                    } else {
-                        log(`SPAWN: FALHA NO SSHD (${res.info})`, "error");
-                    }
-                } else {
-                    log(`FALHA NO EXPLOIT: ${res.info}`, "error");
-                    log("Dica: Verifique se o app foi assinado via TrollStore.", "warn");
-                }
-            } catch (e) {
-                log("ERRO AO PROCESSAR RESULTADO: " + e, "error");
+            if (res.status === "SUCCESS") {
+                log(`KASLR: ${res.slide} | UID: ${res.uid}`, "success");
+                if (res.uid === 0) log("ROOT CONFIRMED (UID 0)", "success");
+            } else {
+                log(`ERRO: ${res.info}`, "error");
             }
+        };
+
+        window.receiveCmdOutput = function(output) {
+            log(output, "info");
         };
 
         function runExploit() {
             btn.disabled = true;
-            btn.innerText = "EXPLORANDO KERNEL..."; 
-            log("Disparando trigger nativo via A13_LAB...", "warn");
-            log("Aguardando resposta do Host (KASLR Search)...", "info");
-
-            // No iOS real, a ponte correta é window.webkit.messageHandlers
-            if (window.webkit && window.webkit.messageHandlers.A13_LAB) {
-                window.webkit.messageHandlers.A13_LAB.postMessage({ action: "pte_patch" });
-            } else {
-                log("ERRO: Handler nativo (WebKit) não detectado.", "error");
-                btn.disabled = false;
-                btn.innerText = "RE-TENTAR";
-            }
+            log("Disparando trigger nativo...", "warn");
+            window.webkit.messageHandlers.A13_LAB.postMessage({ action: "pte_patch" });
         }
 
-        window.onload = () => {
-            if(window.webkit && window.webkit.messageHandlers.A13_LAB) {
-                log("HOST NATIVO CONECTADO.", "success");
-            } else {
-                log("ERRO: Ponte WebKit ausente. Execute dentro do App nativo.", "error");
-            }
-        };
+        function sendCmd() {
+            const cmd = document.getElementById('cmdInput').value;
+            if(!cmd) return;
+            log(`exec: ${cmd}`, "warn");
+            window.webkit.messageHandlers.A13_LAB.postMessage({ action: "exec_cmd", command: cmd });
+            document.getElementById('cmdInput').value = "";
+        }
     </script>
 </body>
 </html>
