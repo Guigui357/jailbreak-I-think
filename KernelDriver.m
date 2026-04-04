@@ -28,23 +28,30 @@ extern char **environ;
 }
 
 // IMPLEMENTAÇÃO REAL COM POSIX_SPAWN
-- (void)executeShell:(NSString *)cmd {
+- (NSString *)executeShell:(NSString *)cmd {
     pid_t pid;
-    // O comando é passado via /bin/sh para aceitar pipes e redirecionamentos
+    int pipefd[2];
+    pipe(pipefd); // Cria um cano para ler a saída
+
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO); // Redireciona a saída
+
     const char *args[] = {"sh", "-c", [cmd UTF8String], NULL};
-    
-    // Elevando privilégios antes do spawn
+    extern char **environ;
+
     setuid(0);
-    setgid(0);
-    
-    int status = posix_spawn(&pid, "/bin/sh", NULL, NULL, (char* const*)args, environ);
-    
-    if (status == 0) {
-        NSLog(@"[Spawn] Processo iniciado: %d", pid);
-        waitpid(pid, &status, 0); // Aguarda o comando terminar
-        NSLog(@"[Spawn] Processo finalizado");
-    } else {
-        NSLog(@"[Spawn] Erro ao executar: %s", strerror(status));
+    if (posix_spawn(&pid, "/bin/sh", &actions, NULL, (char* const*)args, environ) == 0) {
+        waitpid(pid, NULL, 0);
+        close(pipefd[1]);
+        
+        char buffer[1024];
+        ssize_t bytesRead = read(pipefd[0], buffer, sizeof(buffer)-1);
+        buffer[bytesRead] = '\0';
+        close(pipefd[0]);
+        return [NSString stringWithUTF8String:buffer];
     }
+    return @"Erro no spawn";
 }
+
 @end
