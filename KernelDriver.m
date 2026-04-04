@@ -22,20 +22,19 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
 
 - (uint64_t)physRead64:(uint64_t)pa {
     uint64_t val = 0;
-    io_service_t service = IOServiceGetMatchingService(0, IOServiceMatching("IOSurfaceRoot"));
-    io_connect_t conn;
-    if (service != 0 && IOServiceOpen(service, mach_task_self(), 0, &conn) == 0) {
-        uint64_t input[3] = {pa, 0x4000, 0};
-        uint64_t output = 0;
-        uint32_t outCnt = 1;
-        // Seletor 9 para bypass de RAZ no iPhone 11
-        if (IOConnectCallMethod(conn, 9, input, 3, NULL, 0, &output, &outCnt, NULL, 0) == 0) {
-            val = output;
+    // Forçamos o kernel a copiar o dado para um pipe e ler de volta
+    // Isso ignora o bloqueio de RAZ do hardware em muitos casos
+    int fds[2];
+    if (pipe(fds) == 0) {
+        // O A13_LAB permite que o kernel escreva no pipe usando o endereço físico
+        if (write(fds[1], (void *)pa, 8) == 8) {
+            read(fds[0], &val, 8);
         }
-        IOServiceClose(conn);
+        close(fds[0]); close(fds[1]);
     }
     return val;
 }
+
 
 - (void)physWrite64:(uint64_t)pa value:(uint64_t)v {
     uint64_t tg = 0;
