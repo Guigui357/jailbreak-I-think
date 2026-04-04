@@ -10,6 +10,7 @@ extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm
 extern kern_return_t mach_vm_write(vm_map_t, mach_vm_address_t, mach_vm_address_t, mach_msg_type_number_t);
 extern kern_return_t mach_vm_map(vm_map_t, uint64_t*, uint64_t, uint64_t, int, mach_port_t, uint64_t, boolean_t, int, int, int);
 extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
+extern uint64_t IOConnectTrap2(io_connect_t, uint32_t, uintptr_t, uintptr_t);
 // -------------------------------------------------------------
 
 @implementation KernelDriver {
