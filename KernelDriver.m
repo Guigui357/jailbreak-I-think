@@ -84,7 +84,14 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
 
 - (uint64_t)getCurrentUID { return getuid(); }
 - (BOOL)disableKTRR { return YES; }
-- (BOOL)escalateToRoot { [self runFullExploitWithCallback:nil]; return YES; }
+// Procure o método escalateToRoot no KernelDriver.m e substitua por este:
+- (BOOL)escalateToRoot { 
+    [self runFullExploitWithCallback:^(BOOL success, NSString *message) {
+        // Bloco vazio para evitar o warning de non-null
+    }]; 
+    return YES; 
+}
+
 - (void)userContentController:(id)u didReceiveScriptMessage:(WKScriptMessage *)m {
     if ([m.body[@"action"] isEqualToString:@"pte_patch"]) [self escalateToRoot];
 }
