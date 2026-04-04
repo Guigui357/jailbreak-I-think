@@ -1,91 +1,70 @@
 <!DOCTYPE html>
-<html lang="pt-br">
+<html>
 <head>
-    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>A13 TERMINAL FIX</title>
     <style>
-        /* Ajuste para o teclado não cobrir o input */
-        body { 
-            background: #000; color: #00ff41; font-family: 'Courier New', monospace; 
-            margin: 0; padding: 10px; 
-            display: flex; flex-direction: column; 
-            height: calc(100% - 20px); position: absolute; top: 0; bottom: 0; left: 0; right: 0;
-        }
-        #terminal-log { 
-            flex: 1; border: 1px solid #00ff41; background: #050505; 
-            padding: 10px; overflow-y: auto; font-size: 11px; 
-            box-shadow: inset 0 0 15px #00ff4122; margin-bottom: 5px;
-            -webkit-overflow-scrolling: touch; /* Scroll suave no iOS */
-        }
-        .input-box { 
-            display: flex; border: 1px solid #00ff41; background: #111; 
-            padding: 12px; align-items: center; min-height: 44px;
-        }
-        #cmd-in { 
-            flex: 1; background: transparent; border: none; color: #fff; 
-            font-family: monospace; outline: none; font-size: 16px; /* 16px evita o zoom automático no iOS */
-        }
-        .prompt { font-weight: bold; margin-right: 10px; color: #00ff41; }
-        .btn-group { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; margin-bottom: 5px; }
-        button { background: #111; color: #00ff41; border: 1px solid #00ff41; padding: 8px; font-size: 10px; font-weight: bold; text-transform: uppercase; }
-        .success { color: #fff; text-shadow: 0 0 10px #00ff41; }
+        body { background: #000; color: #0f0; font-family: monospace; margin: 0; padding: 10px; display: flex; flex-direction: column; height: 100vh; }
+        #log-container { flex: 1; border: 1px solid #0f0; overflow-y: scroll; padding: 5px; font-size: 12px; margin-bottom: 10px; background: #050505; }
+        .input-line { display: flex; background: #111; border: 1px solid #0f0; padding: 10px; }
+        input { flex: 1; background: transparent; border: none; color: #fff; outline: none; font-size: 16px; }
+        button { background: #0f0; color: #000; border: none; padding: 10px; margin-bottom: 5px; font-weight: bold; width: 32%; }
     </style>
 </head>
 <body>
 
-    <div class="btn-group">
-        <button onclick="runExploit()">Exploit</button>
+    <div style="display: flex; justify-content: space-between;">
+        <button onclick="runExploit()">EXPLOIT</button>
         <button onclick="patchAMFI()">AMFI</button>
         <button onclick="setupSSH()">SSH</button>
     </div>
 
-    <div id="terminal-log">
-        [*] [iP11-A13] CATALYST-26 ONLINE<br>
-        <hr style="border:0.5px solid #333;">
+    <div id="log-container">
+        [*] [A13] Inicializando Terminal...<br>
     </div>
 
-    <div class="input-box">
-        <span class="prompt" id="ps1">root#</span>
-        <input type="text" id="cmd-in" autocomplete="off" spellcheck="false" enterkeyhint="go">
+    <div class="input-line">
+        <span style="margin-right:5px">root#</span>
+        <input type="text" id="cmd-in" autocomplete="off" spellcheck="false">
     </div>
 
     <script>
-        const logArea = document.getElementById('terminal-log');
-        const input = document.getElementById('cmd-in');
+        const logBox = document.getElementById('log-container');
+        const cmdInput = document.getElementById('cmd-in');
 
-        const log = (m, type = 'info') => {
-            const s = document.createElement('span');
-            if (type === 'success') s.className = 'success';
-            s.innerHTML = `> ${m}<br>`;
-            logArea.appendChild(s);
-            logArea.scrollTop = logArea.scrollHeight;
+        // Função global de Log (acessível pelo ViewController via evaluateJavaScript)
+        window.log = function(msg, type) {
+            const color = type === 'success' ? '#fff' : '#0f0';
+            logBox.innerHTML += `<span style="color:${color}">> ${msg}</span><br>`;
+            logBox.scrollTop = logBox.scrollHeight;
         };
 
-        // Rola para o final quando o teclado aparece
-        input.addEventListener('focus', () => {
-            setTimeout(() => { window.scrollTo(0, document.body.scrollHeight); }, 300);
-        });
-
-        function sendCommand(action, payload = "", addr = "", val = "") {
+        function send(action, payload = "", addr = "", val = "") {
             if (window.webkit && window.webkit.messageHandlers.A13_LAB) {
                 window.webkit.messageHandlers.A13_LAB.postMessage({
-                    action: action, payload: payload, addr: addr.toString(), val: val.toString()
+                    action: action, payload: payload, addr: addr, val: val
                 });
+            } else {
+                log("ERRO: Bridge A13_LAB não encontrada!", "err");
             }
         }
 
-        function runExploit() { log("Iniciando Exploit A13...", "success"); /* ... lógica PAC ... */ }
-        function patchAMFI() { log("Patcheando AMFI...", "success"); sendCommand("kwrite", "", "0xfffffff007009a40", "0xD2800000D65F03C0"); }
-        function setupSSH() { log("Preparando SSHD...", "info"); sendCommand("shell", "sshd"); }
+        function runExploit() {
+            log("Iniciando Cadeia de Exploração A13...", "success");
+            log("KASLR Base: 0xfffffff007004000");
+            // Se der 0x0 aqui, o KernelDriver.m não retornou a TFP0
+            send("kwrite", "", "0xfffffff007004000", "0x0"); 
+        }
 
-        input.addEventListener("keyup", (e) => {
+        function patchAMFI() { log("Aplicando Patch AMFI Real..."); send("shell", "amfi"); }
+        function setupSSH() { log("Configurando SSHD..."); send("shell", "sshd"); }
+
+        cmdInput.addEventListener("keyup", (e) => {
             if (e.key === "Enter") {
-                const cmd = input.value.trim();
+                const cmd = cmdInput.value;
                 if (cmd) {
-                    log(`<span style="color:#fff"># ${cmd}</span>`, 'none');
-                    sendCommand("shell", cmd);
-                    input.value = '';
+                    log(`<b style="color:white"># ${cmd}</b>`, 'none');
+                    send("shell", cmd);
+                    cmdInput.value = "";
                 }
             }
         });
