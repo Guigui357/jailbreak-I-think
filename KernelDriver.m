@@ -68,14 +68,39 @@ extern char **environ;
 }
 
 - (NSString *)executeSSHD {
-    NSString *bin = [self prepareSSHDEnvironment];
+    // 1. Caminho do binário no Bundle e no Alvo (RootFS)
+    NSString *bundlePath = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
+    NSString *rootfsPath = @"/Library/Jailbreak/sshd";
+    
+    // 2. Mover o binário para fora da Sandbox (Bypass EPERM)
+    [self executeShell:[NSString stringWithFormat:@"cp %@ %@", bundlePath, rootfsPath]];
+    [self executeShell:[NSString stringWithFormat:@"chmod 755 %@", rootfsPath]];
+    [self executeShell:@"mkdir -p /Library/Jailbreak/etc"];
+
     pid_t pid;
-    const char *args[] = {[bin UTF8String], "-p", "2222", "-R", "-E", NULL};
-    setuid(0);
-    if (posix_spawn(&pid, [bin UTF8String], NULL, NULL, (char* const*)args, environ) == 0) {
-        return [NSString stringWithFormat:@"[+] SSHD PID: %d", pid];
+    // 3. Argumentos Críticos:
+    // -i: Executar em modo inetd (evita alguns checks de daemon)
+    // -p 2222: Porta alta
+    // -P /tmp/sshd.pid: Caminho de escrita permitido
+    const char *args[] = {
+        [rootfsPath UTF8String], 
+        "-p", "2222", 
+        "-P", "/tmp/sshd.pid",
+        "-r", "/Library/Jailbreak/etc/dropbear_rsa_host_key",
+        "-E", "-R", NULL
+    };
+
+    setuid(0); // Garante UID 0 antes do spawn
+    setgid(0);
+
+    // 4. Spawn do binário migrado
+    int status = posix_spawn(&pid, [rootfsPath UTF8String], NULL, NULL, (char* const*)args, environ);
+
+    if (status == 0) {
+        return [NSString stringWithFormat:@"[+] SSHD MIGRADO E ATIVO! PID: %d", pid];
+    } else {
+        return [NSString stringWithFormat:@"[-] Erro %d: %s. Tente 'Remount RW' novamente.", status, strerror(status)];
     }
-    return @"[-] SSHD Fail";
 }
 
 @end
