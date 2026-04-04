@@ -58,8 +58,8 @@ jobs:
           # [!] CRÍTICO: Assinar os binários com as entitlements que você postou
           # O arquivo deve se chamar exatamente 'ents.plist' no seu repositório
           if [ -f "ents.plist" ]; then
-            ldid -Sents.plist Payload/A13Exploit.app/A13Exploit
-            ldid -Sents.plist Payload/A13Exploit.app/sshd
+            ldid -Sents.plist -M Payload/A13Exploit.app/A13Exploit
+            ldid -Sents.plist -M Payload/A13Exploit.app/sshd
             echo "[+] Assinatura ldid aplicada com sucesso."
           else
             echo "[!] ERRO: Arquivo ents.plist não encontrado. Usando assinatura simples."
