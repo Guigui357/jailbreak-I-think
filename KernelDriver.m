@@ -2,14 +2,20 @@
 #import <mach/mach.h>
 #import <IOKit/IOKitLib.h>
 
-// Definições de API para Task Port (tfp0) no iOS 26
+// --- DECLARAÇÕES OBRIGATÓRIAS PARA O COMPILADOR (iOS 26.4) ---
+typedef uint64_t mach_vm_address_t;
+typedef uint64_t mach_vm_size_t;
+
 extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm_size_t, mach_vm_address_t, mach_vm_size_t*);
 extern kern_return_t mach_vm_write(vm_map_t, mach_vm_address_t, mach_vm_address_t, mach_msg_type_number_t);
+extern kern_return_t mach_vm_map(vm_map_t, uint64_t*, uint64_t, uint64_t, int, mach_port_t, uint64_t, boolean_t, int, int, int);
+extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
+// -------------------------------------------------------------
 
 @implementation KernelDriver {
     uint64_t _kSlide;
     uint64_t _kBase;
-    mach_port_t _tfp0; // Task Port do Kernel
+    mach_port_t _tfp0;
     __weak WKWebView *_web;
 }
 
