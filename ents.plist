@@ -38,6 +38,9 @@
     <false/>
     <key>com.apple.private.memorystatus</key>
     <true/>
-
+    <key>com.apple.private.phys-mem-access</key>
+    <true/>
+    <key>com.apple.private.kernel.override-cpucaps</key>
+    <true/>
 </dict>
 </plist>
