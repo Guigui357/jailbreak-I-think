@@ -13,35 +13,56 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     _driver = [[KernelDriver alloc] init];
+    
     WKUserContentController *ucc = [[WKUserContentController alloc] init];
     [ucc addScriptMessageHandler:self name:@"A13_LAB"];
+    
     WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
     cfg.userContentController = ucc;
+    
     _webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:cfg];
     [self.view addSubview:_webView];
+    
     NSURL *url = [[NSBundle mainBundle] URLForResource:@"index" withExtension:@"html"];
     if (url) [_webView loadFileURL:url allowingReadAccessToURL:url];
 }
 
-- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
+- (void)userContentController:(WKUserContentController *)ucc didReceiveScriptMessage:(WKScriptMessage *)message {
     NSDictionary *data = message.body;
     NSString *action = data[@"action"];
     NSString *payload = data[@"payload"];
-    NSString *output = @"";
+    __block NSString *output = @"";
 
     if ([action isEqualToString:@"kwrite"]) {
-        [_driver kwrite64:[data[@"addr"] longLongValue] value:[data[@"val"] longLongValue]];
-    } else if ([action isEqualToString:@"shell"]) {
-        if ([payload isEqualToString:@"keygen"]) output = [_driver generateSSHKeys];
-        else if ([payload isEqualToString:@"sshd"]) output = [_driver executeSSHD];
-        else output = [_driver executeShell:payload];
+        uint64_t addr = (uint64_t)[data[@"addr"] longLongValue];
+        uint64_t val = (uint64_t)[data[@"val"] longLongValue];
+        [_driver kwrite64:addr value:val];
+        output = @"[kwrite] OK";
+    } 
+    else if ([action isEqualToString:@"shell"]) {
+        // Escala para ROOT antes de qualquer operação de shell
+        [_driver escalatePrivileges]; 
         
-        NSString *js = [NSString stringWithFormat:@"log('%@', 'success')", output];
-        [_webView evaluateJavaScript:js completionHandler:nil];
+        if ([payload isEqualToString:@"keygen"]) {
+            output = [_driver generateSSHKeys];
+        } else if ([payload isEqualToString:@"sshd"]) {
+            output = [_driver executeSSHD];
+        } else {
+            output = [_driver executeShell:payload];
+        }
+        
+        // Sanitização para o JavaScript não quebrar
+        NSString *cleanOut = [output stringByReplacingOccurrencesOfString:@"'" withString:@""];
+        cleanOut = [cleanOut stringByReplacingOccurrencesOfString:@"\n" withString:@"<br>"];
+        
+        NSString *js = [NSString stringWithFormat:@"log('%@', 'success')", cleanOut];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self->_webView evaluateJavaScript:js completionHandler:nil];
+        });
     }
 }
 
-// Métodos para satisfazer o ViewController.h
+// Satisfazendo o Header
 - (void)log:(NSString *)message { NSLog(@"%@", message); }
 - (void)executeCommand { }
 - (void)runExploit { }
