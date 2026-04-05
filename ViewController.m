@@ -6,16 +6,17 @@
 #import <unistd.h>
 #import <string.h>
 #import <errno.h>
+#import <dlfcn.h>
 
 // ============================================================
-// MARK: - KernelDriver (implementação completa)
+// MARK: - KernelDriver (com fallback libkernrw)
 // ============================================================
 
 extern kern_return_t mach_vm_write(vm_map_t, mach_vm_address_t, vm_offset_t, mach_msg_type_number_t);
 extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm_size_t, mach_vm_address_t, mach_vm_size_t *);
 extern char **environ;
 
-// Offsets para iOS 26.4 (obtidos via kdump - ajuste se necessário)
+// Offsets para iOS 26.4 (ajustar conforme seu dispositivo)
 #define OFFSET_TASK_BSD_INFO   0x4a8
 #define OFFSET_PROC_UCRED      0x138
 #define OFFSET_UCRED_UID       0x20
@@ -40,43 +41,110 @@ extern char **environ;
 
 @implementation KernelDriver {
     mach_port_t _tfp0;
+    // libkernrw function pointers
+    uint64_t (*_libkernrw_kread64)(uint64_t);
+    void (*_libkernrw_kwrite64)(uint64_t, uint64_t);
+    void (*_libkernrw_kwrite32)(uint64_t, uint32_t);
+    BOOL _libkernrw_loaded;
 }
 
 - (instancetype)init {
     self = [super init];
     if (self) {
         _tfp0 = MACH_PORT_NULL;
-        kern_return_t kr = task_for_pid(mach_task_self(), 0, &_tfp0);
-        if (kr != KERN_SUCCESS || _tfp0 == MACH_PORT_NULL) {
-            NSLog(@"[!] KernelDriver: task_for_pid falhou (jailbreak necessário)");
-        } else {
-            NSLog(@"[+] KernelDriver: tfp0 = %d", _tfp0);
+        _libkernrw_loaded = NO;
+        _libkernrw_kread64 = NULL;
+        _libkernrw_kwrite64 = NULL;
+        _libkernrw_kwrite32 = NULL;
+        
+        // Tenta carregar libkernrw primeiro (se disponível)
+        [self loadLibKernRW];
+        
+        // Se não carregou, tenta task_for_pid
+        if (!_libkernrw_loaded) {
+            kern_return_t kr = task_for_pid(mach_task_self(), 0, &_tfp0);
+            if (kr == KERN_SUCCESS && _tfp0 != MACH_PORT_NULL) {
+                NSLog(@"[+] KernelDriver: tfp0 = %d", _tfp0);
+            } else {
+                NSLog(@"[!] KernelDriver: nenhuma primitiva de kernel disponível");
+            }
         }
     }
     return self;
 }
 
+- (BOOL)loadLibKernRW {
+    if (_libkernrw_loaded) return YES;
+    
+    // Tenta caminhos possíveis
+    NSArray *paths = @[
+        [[NSBundle mainBundle] pathForResource:@"libkernrw.0" ofType:@"dylib"],
+        @"/usr/lib/libkernrw.0.dylib",
+        @"/Library/jailbreak/libkernrw.0.dylib"
+    ];
+    
+    void *handle = NULL;
+    for (NSString *path in paths) {
+        if (path && [[NSFileManager defaultManager] fileExistsAtPath:path]) {
+            handle = dlopen([path UTF8String], RTLD_LAZY);
+            if (handle) break;
+        }
+    }
+    
+    if (!handle) {
+        NSLog(@"[!] libkernrw.0.dylib não encontrado");
+        return NO;
+    }
+    
+    _libkernrw_kread64 = dlsym(handle, "kread64");
+    _libkernrw_kwrite64 = dlsym(handle, "kwrite64");
+    _libkernrw_kwrite32 = dlsym(handle, "kwrite32");
+    
+    if (!_libkernrw_kread64 || !_libkernrw_kwrite64 || !_libkernrw_kwrite32) {
+        NSLog(@"[!] libkernrw símbolos ausentes");
+        return NO;
+    }
+    
+    _libkernrw_loaded = YES;
+    NSLog(@"[+] libkernrw carregado com sucesso");
+    return YES;
+}
+
 - (BOOL)isAvailable {
-    return (_tfp0 != MACH_PORT_NULL);
+    return (_tfp0 != MACH_PORT_NULL) || _libkernrw_loaded;
 }
 
 - (uint64_t)kread64:(uint64_t)addr {
-    if (![self isAvailable]) return 0;
-    uint64_t value = 0;
-    mach_vm_size_t outSize = 0;
-    kern_return_t kr = mach_vm_read_overwrite(_tfp0, (mach_vm_address_t)addr,
-                                              sizeof(value), (mach_vm_address_t)&value, &outSize);
-    return (kr == KERN_SUCCESS && outSize == sizeof(value)) ? value : 0;
+    if (_libkernrw_loaded && _libkernrw_kread64) {
+        return _libkernrw_kread64(addr);
+    }
+    if (_tfp0 != MACH_PORT_NULL) {
+        uint64_t val = 0;
+        mach_vm_size_t outSize = 0;
+        mach_vm_read_overwrite(_tfp0, (mach_vm_address_t)addr, sizeof(val), (mach_vm_address_t)&val, &outSize);
+        return val;
+    }
+    return 0;
 }
 
 - (void)kwrite64:(uint64_t)addr value:(uint64_t)val {
-    if (![self isAvailable]) return;
-    mach_vm_write(_tfp0, (mach_vm_address_t)addr, (vm_offset_t)&val, sizeof(val));
+    if (_libkernrw_loaded && _libkernrw_kwrite64) {
+        _libkernrw_kwrite64(addr, val);
+        return;
+    }
+    if (_tfp0 != MACH_PORT_NULL) {
+        mach_vm_write(_tfp0, (mach_vm_address_t)addr, (vm_offset_t)&val, sizeof(val));
+    }
 }
 
 - (void)kwrite32:(uint64_t)addr value:(uint32_t)val {
-    if (![self isAvailable]) return;
-    mach_vm_write(_tfp0, (mach_vm_address_t)addr, (vm_offset_t)&val, sizeof(val));
+    if (_libkernrw_loaded && _libkernrw_kwrite32) {
+        _libkernrw_kwrite32(addr, val);
+        return;
+    }
+    if (_tfp0 != MACH_PORT_NULL) {
+        mach_vm_write(_tfp0, (mach_vm_address_t)addr, (vm_offset_t)&val, sizeof(val));
+    }
 }
 
 - (uint64_t)findSelfProc {
@@ -109,7 +177,7 @@ extern char **environ;
     if (proc == 0) return;
     uint64_t flagsAddr = proc + OFFSET_PROC_AMFI_FLAGS;
     uint32_t flags = [self kread64:flagsAddr] & 0xFFFFFFFF;
-    flags |= 0x80000000; // desabilita assinatura (exemplo)
+    flags |= 0x80000000; // Exemplo: desabilita assinatura
     [self kwrite32:flagsAddr value:flags];
     NSLog(@"[+] AMFI patch aplicado");
 }
@@ -143,7 +211,7 @@ extern char **environ;
 
 - (NSString *)generateSSHKeys {
     [self executeShell:@"mkdir -p /Library/Jailbreak/etc"];
-    // Usa ssh-keygen do sistema ou do bundle
+    // Tenta usar ssh-keygen do sistema ou do bundle
     NSString *keygen = @"/usr/bin/ssh-keygen";
     if (![[NSFileManager defaultManager] fileExistsAtPath:keygen]) {
         keygen = [[NSBundle mainBundle] pathForResource:@"ssh-keygen" ofType:nil];
@@ -180,16 +248,23 @@ extern char **environ;
 }
 
 - (NSString *)getDriverInfo {
-    return [NSString stringWithFormat:@"KernelDriver (task_for_pid) – iOS 26.4 offsets\nTfp0: %@", [self isAvailable] ? @"sim" : @"não"];
+    if (_libkernrw_loaded) {
+        return @"Driver: libkernrw (kernel read/write via exploit)\nStatus: ATIVO";
+    } else if (_tfp0 != MACH_PORT_NULL) {
+        return [NSString stringWithFormat:@"Driver: task_for_pid (tfp0=%d)\nStatus: ATIVO", _tfp0];
+    } else {
+        return @"Driver: NENHUM\nStatus: INATIVO – sem primitivas de kernel";
+    }
 }
 
 @end
 
 // ============================================================
-// MARK: - ViewController (com WebKit e bridge)
+// MARK: - ViewController (WebKit + bridge)
 // ============================================================
 
 @interface ViewController () <WKScriptMessageHandler>
+@property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) KernelDriver *driver;
 @end
 
@@ -197,19 +272,20 @@ extern char **environ;
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    
     self.driver = [[KernelDriver alloc] init];
     
+    // Configura WebView
     WKUserContentController *ucc = [[WKUserContentController alloc] init];
     [ucc addScriptMessageHandler:self name:@"A13_LAB"];
     
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     config.userContentController = ucc;
     
-    // Usa a propriedade webView declarada no header (assumindo que existe)
     self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
     [self.view addSubview:self.webView];
     
-    // Carrega o HTML embutido
+    // Carrega HTML embutido
     NSString *html = [self embeddedHTML];
     [self.webView loadHTMLString:html baseURL:nil];
 }
@@ -228,8 +304,9 @@ extern char **environ;
     "<input type='text' id='cmd' autofocus></div>"
     "<script>function log(msg,type){let l=document.getElementById('log');l.innerHTML+=`<span style='color:${type==='success'?'#0f0':'#f00'}'> > ${msg}</span><br>`;l.scrollTop=l.scrollHeight;}"
     "function sendAction(action,payload,addr,val){if(window.webkit&&window.webkit.messageHandlers.A13_LAB){window.webkit.messageHandlers.A13_LAB.postMessage({action:action,payload:payload,addr:addr||'',val:val||''});}else{log('Bridge not found','err');}}"
-    "document.getElementById('cmd').addEventListener('keyup',(e)=>{if(e.key==='Enter'){let cmd=e.target.value;if(cmd){log(`<b style='color:white'># ${cmd}</b>`,'none');sendAction('shell',cmd);e.target.value='';}}});</script>"
-    "</body></html>";
+    "document.getElementById('cmd').addEventListener('keyup',(e)=>{if(e.key==='Enter'){let cmd=e.target.value;if(cmd){log(`<b style='color:white'># ${cmd}</b>`,'none');sendAction('shell',cmd);e.target.value='';}}});"
+    "window.log = log;"
+    "</script></body></html>";
 }
 
 #pragma mark - WKScriptMessageHandler
@@ -266,7 +343,7 @@ extern char **environ;
         output = @"Ação desconhecida";
     }
     
-    // Sanitiza e envia para o HTML
+    // Escapa caracteres especiais para JavaScript
     NSString *clean = [output stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
     clean = [clean stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
     clean = [clean stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
@@ -278,27 +355,22 @@ extern char **environ;
     });
 }
 
-#pragma mark - Métodos obrigatórios declarados no ViewController.h
+#pragma mark - Métodos opcionais (para compatibilidade com ViewController.h)
 
 - (void)log:(NSString *)message {
-    // Encaminha para o log do HTML
     [self userContentController:nil didReceiveScriptMessage:({
         WKScriptMessage *msg = [WKScriptMessage new];
         [msg setValue:@{@"action": @"shell", @"payload": message} forKey:@"body"];
         msg;
     })];
-    NSLog(@"[LOG] %@", message);
 }
 
 - (void)executeCommand {
-    // Placeholder – pode ser implementado conforme necessidade
-    [self log:@"executeCommand chamado"];
+    [self log:@"executeCommand chamado (placeholder)"];
 }
 
 - (void)runExploit {
-    // Placeholder – aqui você pode disparar um exploit real
-    [self log:@"runExploit chamado – iniciando cadeia de exploração"];
-    [self.driver escalatePrivileges];
+    [self log:@"runExploit chamado (placeholder)"];
 }
 
 @end
