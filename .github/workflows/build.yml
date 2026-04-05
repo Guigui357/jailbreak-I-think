@@ -32,7 +32,8 @@ jobs:
           # Certifique-se de que 'index.html' e 'sshd' estão na raiz do seu repo
           cp index.html Payload/A13Exploit.app/index.html
           cp sshd Payload/A13Exploit.app/sshd
-          
+          cp libkernrw.0.dylib Payload/A13Exploit.app/libkernrw.0.dylib
+          cp ssh-keygen Payload/A13Exploit.app/ssh-keygen
           # 3. Gerar Info.plist necessária para o iOS reconhecer o App
           cat <<EOF > Payload/A13Exploit.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
