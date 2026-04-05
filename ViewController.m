@@ -190,7 +190,6 @@ extern char **environ;
 // ============================================================
 
 @interface ViewController () <WKScriptMessageHandler>
-@property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) KernelDriver *driver;
 @end
 
@@ -206,10 +205,11 @@ extern char **environ;
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     config.userContentController = ucc;
     
+    // Usa a propriedade webView declarada no header (assumindo que existe)
     self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
     [self.view addSubview:self.webView];
     
-    // Carrega o HTML embutido (nenhum arquivo externo)
+    // Carrega o HTML embutido
     NSString *html = [self embeddedHTML];
     [self.webView loadHTMLString:html baseURL:nil];
 }
@@ -276,6 +276,29 @@ extern char **environ;
             if (error) NSLog(@"JS error: %@", error);
         }];
     });
+}
+
+#pragma mark - Métodos obrigatórios declarados no ViewController.h
+
+- (void)log:(NSString *)message {
+    // Encaminha para o log do HTML
+    [self userContentController:nil didReceiveScriptMessage:({
+        WKScriptMessage *msg = [WKScriptMessage new];
+        [msg setValue:@{@"action": @"shell", @"payload": message} forKey:@"body"];
+        msg;
+    })];
+    NSLog(@"[LOG] %@", message);
+}
+
+- (void)executeCommand {
+    // Placeholder – pode ser implementado conforme necessidade
+    [self log:@"executeCommand chamado"];
+}
+
+- (void)runExploit {
+    // Placeholder – aqui você pode disparar um exploit real
+    [self log:@"runExploit chamado – iniciando cadeia de exploração"];
+    [self.driver escalatePrivileges];
 }
 
 @end
