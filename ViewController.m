@@ -41,7 +41,6 @@ extern char **environ;
 
 @implementation KernelDriver {
     mach_port_t _tfp0;
-    // libkernrw function pointers
     uint64_t (*_libkernrw_kread64)(uint64_t);
     void (*_libkernrw_kwrite64)(uint64_t, uint64_t);
     void (*_libkernrw_kwrite32)(uint64_t, uint32_t);
@@ -53,14 +52,7 @@ extern char **environ;
     if (self) {
         _tfp0 = MACH_PORT_NULL;
         _libkernrw_loaded = NO;
-        _libkernrw_kread64 = NULL;
-        _libkernrw_kwrite64 = NULL;
-        _libkernrw_kwrite32 = NULL;
-        
-        // Tenta carregar libkernrw primeiro (se disponível)
         [self loadLibKernRW];
-        
-        // Se não carregou, tenta task_for_pid
         if (!_libkernrw_loaded) {
             kern_return_t kr = task_for_pid(mach_task_self(), 0, &_tfp0);
             if (kr == KERN_SUCCESS && _tfp0 != MACH_PORT_NULL) {
@@ -76,7 +68,6 @@ extern char **environ;
 - (BOOL)loadLibKernRW {
     if (_libkernrw_loaded) return YES;
     
-    // Tenta caminhos possíveis
     NSArray *paths = @[
         [[NSBundle mainBundle] pathForResource:@"libkernrw.0" ofType:@"dylib"],
         @"/usr/lib/libkernrw.0.dylib",
@@ -177,7 +168,7 @@ extern char **environ;
     if (proc == 0) return;
     uint64_t flagsAddr = proc + OFFSET_PROC_AMFI_FLAGS;
     uint32_t flags = [self kread64:flagsAddr] & 0xFFFFFFFF;
-    flags |= 0x80000000; // Exemplo: desabilita assinatura
+    flags |= 0x80000000;
     [self kwrite32:flagsAddr value:flags];
     NSLog(@"[+] AMFI patch aplicado");
 }
@@ -211,7 +202,6 @@ extern char **environ;
 
 - (NSString *)generateSSHKeys {
     [self executeShell:@"mkdir -p /Library/Jailbreak/etc"];
-    // Tenta usar ssh-keygen do sistema ou do bundle
     NSString *keygen = @"/usr/bin/ssh-keygen";
     if (![[NSFileManager defaultManager] fileExistsAtPath:keygen]) {
         keygen = [[NSBundle mainBundle] pathForResource:@"ssh-keygen" ofType:nil];
@@ -264,7 +254,6 @@ extern char **environ;
 // ============================================================
 
 @interface ViewController () <WKScriptMessageHandler>
-@property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) KernelDriver *driver;
 @end
 
@@ -275,17 +264,16 @@ extern char **environ;
     
     self.driver = [[KernelDriver alloc] init];
     
-    // Configura WebView
     WKUserContentController *ucc = [[WKUserContentController alloc] init];
     [ucc addScriptMessageHandler:self name:@"A13_LAB"];
     
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     config.userContentController = ucc;
     
+    // A propriedade webView já existe no ViewController.h
     self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
     [self.view addSubview:self.webView];
     
-    // Carrega HTML embutido
     NSString *html = [self embeddedHTML];
     [self.webView loadHTMLString:html baseURL:nil];
 }
@@ -343,7 +331,7 @@ extern char **environ;
         output = @"Ação desconhecida";
     }
     
-    // Escapa caracteres especiais para JavaScript
+    // Escapa caracteres especiais
     NSString *clean = [output stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
     clean = [clean stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
     clean = [clean stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
@@ -355,14 +343,16 @@ extern char **environ;
     });
 }
 
-#pragma mark - Métodos opcionais (para compatibilidade com ViewController.h)
+#pragma mark - Métodos obrigatórios do ViewController.h
 
 - (void)log:(NSString *)message {
-    [self userContentController:nil didReceiveScriptMessage:({
-        WKScriptMessage *msg = [WKScriptMessage new];
-        [msg setValue:@{@"action": @"shell", @"payload": message} forKey:@"body"];
-        msg;
-    })];
+    // Evita passar nil para userContentController
+    if (!message) message = @"";
+    NSString *js = [NSString stringWithFormat:@"log('%@', 'info');", 
+                    [message stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"]];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.webView evaluateJavaScript:js completionHandler:nil];
+    });
 }
 
 - (void)executeCommand {
@@ -370,7 +360,8 @@ extern char **environ;
 }
 
 - (void)runExploit {
-    [self log:@"runExploit chamado (placeholder)"];
+    [self log:@"runExploit chamado – iniciando escalada de privilégios"];
+    [self.driver escalatePrivileges];
 }
 
 @end
