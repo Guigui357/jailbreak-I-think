@@ -25,14 +25,12 @@ jobs:
           -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
           -miphoneos-version-min=15.0 \
           -framework UIKit -framework WebKit -framework Foundation -framework IOKit -framework CoreGraphics \
-          main.m -o Payload/A13Exploit.app/A13Exploit
+          main.m ViewController.m \
+          -o Payload/A13Exploit.app/A13Exploit
           
           # 2. Copiar Recursos (HTML e o binário SSHD)
-          # Certifique-se de que 'index.html' e 'sshd' estão na raiz do seu repo
-          cp index.html Payload/A13Exploit.app/index.html
-          cp sshd Payload/A13Exploit.app/sshd
-          cp libkernrw.0.dylib Payload/A13Exploit.app/libkernrw.0.dylib
-          cp ssh-keygen Payload/A13Exploit.app/ssh-keygen
+          # Certifique-se de que 'exploit.html' está na raiz do seu repo
+          cp exploit.html Payload/A13Exploit.app/exploit.html
           # 3. Gerar Info.plist necessária para o iOS reconhecer o App
           cat <<EOF > Payload/A13Exploit.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
@@ -54,22 +52,18 @@ jobs:
       - name: Assinar com ldid (Bypass Sandbox & Root Privs)
         run: |
           brew install ldid
-          cp sshd Payload/A13Exploit.app/sshd
           # [!] CRÍTICO: Assinar os binários com as entitlements que você postou
           # O arquivo deve se chamar exatamente 'ents.plist' no seu repositório
           if [ -f "ents.plist" ]; then
             ldid -Sents.plist -M Payload/A13Exploit.app/A13Exploit
-            ldid -Sents.plist -M Payload/A13Exploit.app/sshd
             echo "[+] Assinatura ldid aplicada com sucesso."
           else
             echo "[!] ERRO: Arquivo ents.plist não encontrado. Usando assinatura simples."
             ldid -S Payload/A13Exploit.app/A13Exploit
-            ldid -S Payload/A13Exploit.app/sshd
           fi
           
           # Garantir bits de execução
           chmod 755 Payload/A13Exploit.app/A13Exploit
-          chmod 755 Payload/A13Exploit.app/sshd
 
       - name: Pack IPA
         run: |
