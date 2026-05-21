@@ -25,8 +25,7 @@ jobs:
           -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
           -miphoneos-version-min=15.0 \
           -framework UIKit -framework WebKit -framework Foundation -framework IOKit -framework CoreGraphics \
-          ViewController.m main.m \
-          -o Payload/A13Exploit.app/A13Exploit
+          main.m -o Payload/A13Exploit.app/A13Exploit
           
           # 2. Copiar Recursos (HTML e o binário SSHD)
           # Certifique-se de que 'index.html' e 'sshd' estão na raiz do seu repo
