@@ -22,7 +22,7 @@ jobs:
           clang -arch arm64 -miphoneos-version-min=14.0 \
           -framework IOKit -framework CoreFoundation -framework Security \
           -framework Foundation -framework XPC \
-          -o Payload/QuantumJailbreak.app/quantum_jailbreak ViewController.c
+          -o Payload/QuantumJailbreak.app/quantum_jailbreak ViewController.m
 
           cp Info.plist Payload/QuantumJailbreak.app/Info.plist
       - name: Assinar com ldid (Bypass Sandbox & Root Privs)
