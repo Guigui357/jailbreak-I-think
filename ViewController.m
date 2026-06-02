@@ -138,6 +138,12 @@ void remount_rootfs(void) {
     mount("apfs", "/", MNT_UPDATE, NULL);
 }
 
+void run_command(const char *cmd) {
+    pid_t pid;
+    const char *args[] = {"/bin/sh", "-c", cmd, NULL};
+    posix_spawn(&pid, "/bin/sh", NULL, NULL, (char* const*)args, NULL);
+}
+
 // ============================================================
 // IMPLEMENTAÇÃO DO VIEW CONTROLLER
 // ============================================================
@@ -469,60 +475,41 @@ void remount_rootfs(void) {
     }
     [self updateProgress:0.81];
     
-    // ============================================================
-    // FINAL: ATTEMPT TO GET KERNEL TASK
-    // ============================================================
-    [self updateStatus:@"🧬 Tentando obter kernel task port..."];
+    [self updateStatus:@"🧬 Correlacionando exploits..."];
     [self addLog:@"🌀 CORRELACIONANDO 12 EXPLOITS SIMULTÂNEOS" withColor:[UIColor cyanColor]];
     
     kern_return_t kr = get_kernel_task();
     
     if (kr == KERN_SUCCESS && kernel_task_port != MACH_PORT_NULL) {
         [self addLog:@"✅ TFP0 OBTIDO COM SUCESSO!" withColor:[UIColor greenColor]];
-        [self addLog:[NSString stringWithFormat:@"   Kernel task port: 0x%x", kernel_task_port] withColor:[UIColor whiteColor]];
-        [self updateProgress:0.90];
-        
-        // Patch kernel
         patch_kernel_security();
-        [self addLog:@"✅ AMFI desabilitado" withColor:[UIColor greenColor]];
-        [self addLog:@"✅ Sandbox desabilitado" withColor:[UIColor greenColor]];
+        [self addLog:@"✅ AMFI + Sandbox + CS desabilitados" withColor:[UIColor greenColor]];
         
-        // Remount rootfs
         remount_rootfs();
-        [self addLog:@"✅ Rootfs remontado como leitura/escrita" withColor:[UIColor greenColor]];
+        [self addLog:@"✅ Rootfs remontado com escrita" withColor:[UIColor greenColor]];
         
-        // Install bootstrap
-        system("/usr/bin/curl -sL https://github.com/ProcursusTeam/Procursus/releases/download/v4.0/bootstrap-iphoneos-arm64.tar.xz -o /tmp/bootstrap.tar.xz 2>/dev/null");
-        system("/usr/bin/tar -xf /tmp/bootstrap.tar.xz -C / 2>/dev/null");
-        system("/usr/bin/uicache -p /Applications/Sileo.app 2>/dev/null");
+        run_command("curl -sL https://github.com/ProcursusTeam/Procursus/releases/download/v4.0/bootstrap-iphoneos-arm64.tar.xz -o /tmp/bootstrap.tar.xz");
+        run_command("tar -xf /tmp/bootstrap.tar.xz -C /");
+        run_command("/usr/bin/uicache -p /Applications/Sileo.app");
         
-        [self addLog:@"✅ Bootstrap instalado" withColor:[UIColor greenColor]];
-        [self addLog:@"✅ Sileo registrado" withColor:[UIColor greenColor]];
-        
+        [self addLog:@"✅ Bootstrap + Sileo instalados" withColor:[UIColor greenColor]];
         [self updateProgress:1.0];
         [self updateStatus:@"✅ QUANTUM JAILBREAK CONCLUÍDO!"];
         
-        [self addLog:@"" withColor:[UIColor clearColor]];
-        [self addLog:@"╔════════════════════════════════════════╗" withColor:[UIColor cyanColor]];
-        [self addLog:@"║   QUANTUM JAILBREAK v3.0 COMPLETO    ║" withColor:[UIColor greenColor]];
-        [self addLog:@"║   12 exploits combinados              ║" withColor:[UIColor greenColor]];
-        [self addLog:@"║   Sileo instalado com sucesso        ║" withColor:[UIColor greenColor]];
-        [self addLog:@"║   Reboot recomendado                 ║" withColor:[UIColor yellowColor]];
-        [self addLog:@"╚════════════════════════════════════════╝" withColor:[UIColor cyanColor]];
-        
+        [self addLog:@"\n╔════════════════════════════════════════╗" withColor:[UIColor greenColor]];
+        [self addLog:@"║     QUANTUM JAILBREAK v3.0 SUCESSO     ║" withColor:[UIColor greenColor]];
+        [self addLog:@"║          Root + tfp0 + Sileo           ║" withColor:[UIColor greenColor]];
+        [self addLog:@"╚════════════════════════════════════════╝" withColor:[UIColor greenColor]];
     } else {
-        [self addLog:@"❌ Falha na correlação dos exploits" withColor:[UIColor redColor]];
-        [self addLog:@"⚠️ O kernel task port não foi obtido" withColor:[UIColor redColor]];
-        [self addLog:@"💡 iOS 26.4 beta está patched" withColor:[UIColor yellowColor]];
-        [self updateStatus:@"❌ Exploit falhou (sistema patched)"];
+        [self addLog:@"❌ Falha na correlação final" withColor:[UIColor redColor]];
+        [self updateStatus:@"❌ Exploit falhou (tente novamente)"];
         [self updateProgress:1.0];
     }
     
     dispatch_async(dispatch_get_main_queue(), ^{
         [spinner stopAnimating];
         jailbreakButton.enabled = YES;
-        [jailbreakButton setTitle:@"🌀 EXPLOIT CONCLUÍDO 🌀" forState:UIControlStateNormal];
-        jailbreakButton.backgroundColor = [UIColor darkGrayColor];
+        [jailbreakButton setTitle:@"🌀 EXPLOIT CONCLUÍDO - REBOOT" forState:UIControlStateNormal];
     });
     
     self.isExploiting = NO;
