@@ -25,6 +25,7 @@ jobs:
           -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
           -miphoneos-version-min=15.0 \
           -framework UIKit -framework WebKit -framework Foundation -framework IOKit -framework CoreGraphics \
+          -framework Metal -framework ARKit -framework Vision -framework PDFKit \
           ViewController.m \
           -o Payload/A13Exploit.app/A13Exploit
           
