@@ -137,9 +137,6 @@ void run_command(const char *cmd) {
 }
 
 void remount_rootfs(void) {
-    run_command("/sbin/mount -uw / 2>/dev/null");
-    run_command("mount -uw / 2>/dev/null");
-    
     // Alternative mount method
     mount("apfs", "/", MNT_UPDATE, NULL);
 }
