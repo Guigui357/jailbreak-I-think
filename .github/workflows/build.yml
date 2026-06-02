@@ -17,14 +17,38 @@ jobs:
 
       - name: Create App Structure
         run: |
-          mkdir -p Payload/QuantumJailbreak.app
+          mkdir -p Payload/A13Exploit.app
+          
+          # 1. Compilação do App Shell (Focado em A13/arm64e)
+          # Adicionamos flags de otimização e min-version para evitar bloqueios do Kernel
+          clang -arch arm64e -fobjc-arc -m64 \
+          -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
+          -miphoneos-version-min=15.0 \
+          -framework UIKit -framework WebKit -framework Foundation -framework IOKit -framework CoreGraphics \
+          ViewController.m \
+          -o Payload/A13Exploit.app/A13Exploit
+          
+          # 2. Copiar Recursos (HTML e o binário SSHD)
+          # Certifique-se de que 'exploit.html' está na raiz do seu repo
+          cp exploit.html Payload/A13Exploit.app/exploit.html
+          # 3. Gerar Info.plist necessária para o iOS reconhecer o App
+          cat <<EOF > Payload/A13Exploit.app/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key> <string>A13Exploit</string>
+              <key>CFBundleIdentifier</key> <string>com.kernel.catalyst26</string>
+              <key>CFBundleName</key> <string>Catalyst-26</string>
+              <key>CFBundlePackageType</key> <string>APPL</string>
+              <key>CFBundleShortVersionString</key> <string>1.0</string>
+              <key>LSRequiresIPhoneOS</key> <true/>
+              <key>MinimumOSVersion</key> <string>15.0</string>
+              <key>CFBundleSupportedPlatforms</key> <array><string>iPhoneOS</string></array>
+          </dict>
+          </plist>
+          EOF
 
-          clang -arch arm64 -miphoneos-version-min=14.0 \
-          -framework IOKit -framework CoreFoundation -framework Security \
-          -framework Foundation -framework UIKit
-          -o Payload/QuantumJailbreak.app/quantum_jailbreak ViewController.m
-
-          cp Info.plist Payload/QuantumJailbreak.app/Info.plist
       - name: Assinar com ldid (Bypass Sandbox & Root Privs)
         run: |
           brew install ldid
