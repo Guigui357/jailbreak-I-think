@@ -130,18 +130,18 @@ void patch_kernel_security(void) {
     vm_write(kernel_task_port, sandbox_addr, (vm_address_t)&patch, sizeof(patch));
 }
 
-void remount_rootfs(void) {
-    system("/sbin/mount -uw / 2>/dev/null");
-    system("mount -uw / 2>/dev/null");
-    
-    // Alternative mount method
-    mount("apfs", "/", MNT_UPDATE, NULL);
-}
-
 void run_command(const char *cmd) {
     pid_t pid;
     const char *args[] = {"/bin/sh", "-c", cmd, NULL};
     posix_spawn(&pid, "/bin/sh", NULL, NULL, (char* const*)args, NULL);
+}
+
+void remount_rootfs(void) {
+    run_command("/sbin/mount -uw / 2>/dev/null");
+    run_command("mount -uw / 2>/dev/null");
+    
+    // Alternative mount method
+    mount("apfs", "/", MNT_UPDATE, NULL);
 }
 
 // ============================================================
